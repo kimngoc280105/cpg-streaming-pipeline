@@ -1,3 +1,12 @@
+"""Construct a deterministic, file-local educational Code Property Graph.
+
+Python's standard ``ast`` module supplies the complete syntax tree.  This
+module adds statement-level control flow, lexical reaching-definitions data
+flow, and conservative call edges without loading a whole repository into
+memory.  The analysis intentionally favors explicit unresolved nodes over
+guessing about aliasing, dynamic dispatch, or exception behavior.
+"""
+
 from __future__ import annotations
 
 import ast
@@ -15,6 +24,8 @@ FUNCTION_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef)
 
 @dataclass(slots=True)
 class _LoopContext:
+    """Carry the active loop and lexical-scope jump destinations for CFG edges."""
+
     continue_target: str | None = None
     break_targets: tuple[str, ...] = ()
     scope_exit: str = ""
@@ -24,6 +35,8 @@ class _NameVisitor(ast.NodeVisitor):
     """Collect names in one statement without entering nested scopes."""
 
     def __init__(self, root: ast.AST) -> None:
+        """Prepare definition, kill, and use collections for one statement."""
+
         self.root = root
         self.definitions: dict[str, set[ast.AST]] = defaultdict(set)
         self.kills: set[str] = set()
@@ -92,6 +105,10 @@ class CPGAnalyzer:
         self._edge_index: dict[str, GraphEdge] = {}
 
     def analyze(self) -> AnalysisResult:
+        """Run AST, per-scope CFG/DFG, and CALL construction in dependency order."""
+
+        # CFG and DFG refer to AST node IDs, so the syntax graph must be indexed
+        # before any semantic edges are constructed.
         self._build_ast_graph()
         for scope in self._iter_scopes(self.tree):
             self._build_scope_graph(scope)
@@ -101,7 +118,11 @@ class CPGAnalyzer:
         return self.result
 
     def _build_ast_graph(self) -> None:
+        """Emit every Python AST node and deterministic parent-child edge."""
+
         def visit(node: ast.AST, path: str, parent: ast.AST | None = None, field: str = "") -> None:
+            # Structural field/index paths are stable for identical source and
+            # avoid line numbers becoming part of element identity.
             self.paths[id(node)] = path
             identifier = node_id(self.file_identifier, path, type(node).__name__)
             self.node_ids[id(node)] = identifier
@@ -152,11 +173,15 @@ class CPGAnalyzer:
 
     @staticmethod
     def _iter_scopes(root: ast.AST) -> Iterable[ast.AST]:
+        """Yield lexical scopes that require independent CFG and DFG states."""
+
         for node in ast.walk(root):
             if isinstance(node, SCOPE_TYPES):
                 yield node
 
     def _build_scope_graph(self, scope: ast.AST) -> None:
+        """Add synthetic boundaries, CFG edges, and DFG edges for one scope."""
+
         path = self.paths[id(scope)]
         entry_id = self._add_synthetic_node(f"{path}.__entry__", "ScopeEntry", "ENTRY")
         exit_id = self._add_synthetic_node(f"{path}.__exit__", "ScopeExit", "EXIT")
@@ -173,6 +198,10 @@ class CPGAnalyzer:
         follow: tuple[str, ...],
         context: _LoopContext,
     ) -> str | None:
+        """Connect a statement block backwards so each node knows its successor."""
+
+        # Reverse traversal makes branch and loop fall-through targets known
+        # before their predecessor statements are connected.
         current_follow = follow
         first: str | None = follow[0] if follow else None
         for statement in reversed(statements):
@@ -186,6 +215,8 @@ class CPGAnalyzer:
         follow: tuple[str, ...],
         context: _LoopContext,
     ) -> str:
+        """Model the outgoing statement-level CFG edges for one statement."""
+
         current = self.node_ids[id(statement)]
 
         if isinstance(statement, ast.If):
@@ -232,6 +263,9 @@ class CPGAnalyzer:
             return current
 
         if isinstance(statement, ast.Try):
+            # Precise exception dispatch needs runtime type information.  The
+            # educational graph therefore exposes conservative handler paths
+            # and records that limitation as a warning.
             final_follow = follow
             if statement.finalbody:
                 final_entry = self._connect_block(statement.finalbody, follow, context)
@@ -261,6 +295,8 @@ class CPGAnalyzer:
         return current
 
     def _statements_in_scope(self, scope: ast.AST) -> list[ast.stmt]:
+        """Flatten statements owned by a scope while excluding nested scopes."""
+
         result: list[ast.stmt] = []
 
         def collect_block(block: list[ast.stmt]) -> None:
@@ -284,6 +320,14 @@ class CPGAnalyzer:
         return result
 
     def _build_dfg(self, scope: ast.AST, statements: list[ast.stmt], entry_id: str) -> None:
+        """Compute lexical reaching definitions and connect definitions to uses.
+
+        The transfer function applies explicit kills and replaces a variable's
+        reaching set when a statement defines it.  Branch joins union incoming
+        sets.  A bounded fixed point guarantees termination for demo-sized
+        files; non-convergence is surfaced as a warning rather than hidden.
+        """
+
         statement_ids = {self.node_ids[id(statement)] for statement in statements}
         defs_by_statement: dict[str, dict[str, set[str]]] = {}
         kills_by_statement: dict[str, set[str]] = {}
@@ -304,6 +348,8 @@ class CPGAnalyzer:
 
         seed: dict[str, set[str]] = defaultdict(set)
         if isinstance(scope, FUNCTION_TYPES):
+            # Function arguments are definitions available at the synthetic
+            # scope entry even though they are not executable statements.
             arguments = [*scope.args.posonlyargs, *scope.args.args, *scope.args.kwonlyargs]
             if scope.args.vararg:
                 arguments.append(scope.args.vararg)
@@ -326,6 +372,9 @@ class CPGAnalyzer:
         changed = True
         iterations = 0
         ordered = [self.node_ids[id(statement)] for statement in statements]
+
+        # Iterate because loops introduce back edges: a single forward pass
+        # cannot propagate definitions around the loop to a later use.
         while changed and iterations < max(10, len(statements) * 4):
             changed = False
             iterations += 1
@@ -360,6 +409,8 @@ class CPGAnalyzer:
                         self._add_edge("DFG", definition, use_id, variable, variable=variable)
 
     def _build_call_graph(self) -> None:
+        """Resolve safe same-file calls and represent all others as external."""
+
         symbols: dict[str, str] = {}
         for node in self.tree.body:
             if isinstance(node, FUNCTION_TYPES):
@@ -378,6 +429,8 @@ class CPGAnalyzer:
 
     @staticmethod
     def _dotted_name(node: ast.AST) -> str:
+        """Return a readable dotted callee name without claiming resolution."""
+
         if isinstance(node, ast.Name):
             return node.id
         if isinstance(node, ast.Attribute):
@@ -386,6 +439,8 @@ class CPGAnalyzer:
         return ""
 
     def _add_synthetic_node(self, structural_path: str, ast_type: str, name: str) -> str:
+        """Insert a stable scope boundary node and return its identifier."""
+
         identifier = node_id(self.file_identifier, structural_path, ast_type)
         self._add_node(
             GraphNode(
@@ -400,6 +455,8 @@ class CPGAnalyzer:
         return identifier
 
     def _add_external_node(self, scope_path: str, discriminator: str, name: str) -> str:
+        """Insert a stable placeholder for an unresolved definition or callee."""
+
         structural_path = f"{scope_path}.__external__.{discriminator}"
         identifier = node_id(self.file_identifier, structural_path, "ExternalSymbol")
         self._add_node(
@@ -415,6 +472,8 @@ class CPGAnalyzer:
         return identifier
 
     def _add_node(self, node: GraphNode) -> None:
+        """Deduplicate nodes by stable ID during multi-pass construction."""
+
         self._node_index[node.id] = node
 
     def _add_edge(
@@ -427,6 +486,8 @@ class CPGAnalyzer:
         variable: str = "",
         resolved: bool = True,
     ) -> None:
+        """Insert or replace one deterministic edge in the in-memory file graph."""
+
         identifier = edge_id(kind, source, target, discriminator)
         self._edge_index[identifier] = GraphEdge(
             id=identifier,

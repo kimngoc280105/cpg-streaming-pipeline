@@ -58,6 +58,16 @@ def main() -> int:
             for cell in nb.get("cells", [])
             if cell.get("cell_type") == "markdown"
         )
+        for label in (
+            "## Approach and rationale",
+            "**Approach:**",
+            "**Why this approach:**",
+            "**Alternatives and trade-offs:**",
+        ):
+            if label not in markdown:
+                failures.append(f"{name}: narrative missing {label}")
+        if "```mermaid" not in markdown and "![" not in markdown:
+            failures.append(f"{name}: missing embedded figure or database UI capture")
         if "## Reflection" not in markdown:
             failures.append(f"{name}: missing Reflection section")
         for label in ("**Worked:**", "**Failed:**", "**Resolution:**"):

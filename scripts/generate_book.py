@@ -124,7 +124,26 @@ flowchart LR
 ```
 
 Graph topology goes directly from Kafka Connect to Neo4j. Spark is used only
-for source metadata; parser failures and connector failures have separate paths."""
+for source metadata; parser failures and connector failures have separate paths.
+
+## Approach and rationale
+
+**Approach:** The pipeline separates graph topology, source metadata, parser
+errors, and connector failures at the Kafka boundary. Kafka Connect owns the
+node/edge branch, while one Spark Structured Streaming query owns only the
+metadata branch and persists its checkpoint on a Docker volume.
+
+**Why this approach:** The split follows the assignment's required sink paths
+and gives each consumer the smallest possible contract. Sending topology
+directly through Kafka Connect avoids an unnecessary Spark transformation and
+keeps Neo4j ingestion independent from metadata analytics. Separate error paths
+prevent a malformed source file or sink record from stopping valid traffic.
+
+**Alternatives and trade-offs:** A single topic or a Spark job for both sinks
+would reduce the number of components but couple unrelated schemas, recovery
+semantics, and failure handling. One partition and one broker make ordering and
+the classroom demonstration reproducible, at the cost of throughput and
+production-grade availability."""
     services_source = """import subprocess
 from pathlib import Path
 
@@ -193,7 +212,36 @@ print('PASS: shallow clone, locked commit, and discovery counts verified')"""
         "task1_repository.ipynb",
         notebook(
             "Task 1 - Repository cloning and file discovery",
-            f"The assigned repository is [{REPO_ID}]({REPO_URL}). The ignored source tree is a shallow clone locked to `{repository['commit_sha']}`. Baseline and post-replay line counts are reported separately.",
+            f"""The assigned repository is [{REPO_ID}]({REPO_URL}). The ignored
+source tree is a shallow clone locked to `{repository['commit_sha']}`.
+Baseline and post-replay line counts are reported separately.
+
+```mermaid
+flowchart LR
+  U[Assigned public repository] --> C[Shallow clone]
+  C --> L[Checkout locked commit]
+  L --> R[Count every .py file]
+  R --> F[Apply documented exclusions]
+  F --> P[Parseability and feature scan]
+```
+
+## Approach and rationale
+
+**Approach:** The bootstrap script performs a depth-one clone, pins the selected
+Optimum commit, reports both raw and filtered Python counts, and applies one
+explicit exclusion policy before parsing. The report preserves the locked
+baseline count separately from the seven-line replay modification.
+
+**Why this approach:** A moving default branch would make counts and CPG
+evidence impossible to reproduce. Shallow cloning satisfies the download-size
+requirement, while reporting raw and filtered counts makes optional exclusions
+auditable rather than silently changing the denominator.
+
+**Alternatives and trade-offs:** Vendoring the third-party repository would make
+the submission self-contained but duplicate unrelated source and history.
+Processing tests and generated files could increase coverage, but it would add
+noise and cost without improving the demonstration; excluded paths are therefore
+listed so the scope remains transparent.""",
             [code_cell(source)],
             f"""**Worked:** The shallow clone reports {repository['raw_python_files']} raw Python files and {repository['processed_python_files']} processed files with full parseability.
 
@@ -262,7 +310,44 @@ print('PASS: parser, replay, schema, and syntax-error tests')"""
         "task2_parser.ipynb",
         notebook(
             "Task 2 - Incremental CPG Parser Service",
-            "The service uses Python `ast`, stable structural IDs, statement-level CFG, lexical reaching-definitions DFG, and conservative top-level same-file call resolution. It releases each file graph before processing the next file.",
+            """The service uses Python `ast`, stable structural IDs,
+statement-level CFG, lexical reaching-definitions DFG, and conservative
+top-level same-file call resolution. It releases each file graph before
+processing the next file.
+
+```mermaid
+flowchart LR
+  F[One Python file] --> A[Python ast]
+  A --> N[AST nodes and edges]
+  A --> C[Statement CFG]
+  C --> D[Reaching-definitions DFG]
+  A --> K[Conservative CALL edges]
+  N --> T[One Kafka transaction]
+  C --> T
+  D --> T
+  K --> T
+  T --> M[Manifest advances after commit]
+```
+
+## Approach and rationale
+
+**Approach:** Each file is decoded, analyzed, reconciled against its previous
+stable node and edge IDs, and emitted in one Kafka transaction. AST field/index
+paths define identity; the CFG models statement flow; DFG uses a bounded
+per-scope fixed point; unresolved definitions and calls become explicit external
+nodes rather than guessed targets.
+
+**Why this approach:** The standard-library AST is available without a heavy
+Joern runtime and preserves every Python syntax node needed by the lab.
+File-local passes bound graph memory by the largest source file. Structural IDs,
+stale deletes, and updating SQLite only after Kafka commits jointly make retries
+idempotent and recoverable.
+
+**Alternatives and trade-offs:** Joern offers deeper interprocedural semantics
+and tree-sitter offers robust multi-version parsing, but both add integration
+cost beyond the laboratory scope. The chosen analysis deliberately sacrifices
+alias analysis, precise exception flow, and dynamic dispatch; warnings and
+external nodes expose those limits instead of overstating accuracy.""",
             [code_cell(aggregate_source), code_cell(tests_source)],
             """**Worked:** Deterministic IDs, all four CPG edge categories, bounded file-by-file processing, and stale-element reconciliation pass the regression suite.
 
@@ -308,7 +393,40 @@ print('PASS: read_committed broker samples cover all four required topics')"""
         "task3_kafka.ipynb",
         notebook(
             "Task 3 - Kafka topic and event design",
-            "Nodes, edges, metadata, and parser failures have separate topics. Every record carries a schema version, event time, stable key, content hash, run ID, event ID, and operation.",
+            """Nodes, edges, metadata, and parser failures have separate topics.
+Every record carries a schema version, event time, stable key, content hash,
+run ID, event ID, and operation.
+
+```mermaid
+flowchart TB
+  P[Parser Service] -->|node_id key| N[cpg.nodes.v1 compact]
+  P -->|edge_id key| E[cpg.edges.v1 compact]
+  P -->|file_id key| M[cpg.source-metadata.v1 compact]
+  P -->|error_id key| X[cpg.parser-errors.v1 delete retention]
+  N --> C[Neo4j Kafka Connect]
+  E --> C
+  M --> S[Spark Structured Streaming]
+```
+
+## Approach and rationale
+
+**Approach:** The four required event families use separate, explicitly created
+topics. Node, edge, and metadata records use stable entity keys and compaction;
+parser errors use time-based delete retention. Every JSON envelope carries
+versioning, UTC event time, repository/file/run identity, content hash, and an
+operation.
+
+**Why this approach:** Neo4j and Spark need different schemas, retention, and
+failure handling. Stable keys let compaction and downstream `MERGE`/upsert
+converge on the latest entity state, while retaining parser errors preserves an
+audit trail without treating an error as graph state.
+
+**Alternatives and trade-offs:** A single multiplexed topic would simplify topic
+creation but force every consumer to filter unrelated records and weaken schema
+isolation. A Schema Registry would provide stronger centralized governance; for
+this self-contained lab, versioned JSON Schemas and contract tests keep setup
+smaller. One partition per topic favors deterministic replay, while cross-topic
+ordering is intentionally handled by idempotent sinks.""",
             [code_cell(topics_source), code_cell(samples_source)],
             """**Worked:** All required topics have the intended partition, replication, cleanup policy, keyed records, schema version, and UTC event time.
 
@@ -367,7 +485,29 @@ print('PASS: Neo4j connector DLQ is empty')"""
         "task4_neo4j.ipynb",
         notebook(
             "Task 4 - Graph topology ingestion into Neo4j",
-            "Kafka Connect consumes only node and edge topics. Cypher handlers use `MERGE`, create placeholder endpoints when necessary, and reconcile delete events without Spark.",
+            """Kafka Connect consumes only node and edge topics. Cypher handlers
+use `MERGE`, create placeholder endpoints when necessary, and reconcile delete
+events without Spark.
+
+## Approach and rationale
+
+**Approach:** A dedicated Neo4j Kafka Sink subscribes only to
+`cpg.nodes.v1` and `cpg.edges.v1`. One generic `CPGNode` label and one
+`CPG_EDGE` relationship type carry semantic kinds as properties. Cypher
+handlers `MERGE` by stable ID, create missing endpoints for out-of-order edge
+arrival, and process explicit delete events. A uniqueness constraint protects
+node IDs and the connector routes failures to a DLQ.
+
+**Why this approach:** Direct Kafka Connect ingestion is an explicit assignment
+constraint and avoids making Spark a graph relay. Property-based kinds keep the
+Cypher handlers static and compatible, while placeholder endpoints remove any
+false assumption that separate node and edge topics arrive in lockstep.
+
+**Alternatives and trade-offs:** Dynamic Neo4j labels and relationship types
+would look more natural in Browser queries but complicate parameterized sink
+Cypher and schema evolution. Waiting for every node before consuming edges
+would require cross-topic coordination; placeholders plus later node `MERGE`
+provide eventual convergence with a simpler, retry-safe connector.""",
             [
                 code_cell(status_source),
                 code_cell(counts_source),
@@ -415,7 +555,30 @@ print('PASS: Spark checkpoint has consumed the metadata topic')"""
         "task5_mongodb.ipynb",
         notebook(
             "Task 5 - Source metadata ingestion into MongoDB",
-            "Spark reads only `cpg.source-metadata.v1`, parses an explicit schema, and writes replacement upserts keyed by `_id=file_id`. Its checkpoint is retained on a Docker volume.",
+            """Spark reads only `cpg.source-metadata.v1`, parses an explicit
+schema, and writes replacement upserts keyed by `_id=file_id`. Its checkpoint
+is retained on a Docker volume.
+
+## Approach and rationale
+
+**Approach:** One Spark Structured Streaming query reads the metadata topic with
+an explicit nested schema and `read_committed` isolation. The MongoDB connector
+uses replacement upserts with `_id=file_id`; Kafka offsets are stored in each
+document as evidence, while Spark recovery state lives in a persistent
+checkpoint volume.
+
+**Why this approach:** Metadata is naturally one document per source file, so a
+replacement upsert expresses the desired latest-state model and prevents field
+fragments from surviving an update. An explicit schema surfaces incompatible
+events early. The checkpoint, rather than an application-maintained offset,
+lets Spark resume with its own checkpointed offset and progress protocol.
+
+**Alternatives and trade-offs:** Append-only MongoDB writes would retain event
+history but violate the required no-duplication final state. `foreachBatch`
+could implement custom writes, yet the MongoDB Spark Connector already supplies
+the required sink semantics with less custom code. `startingOffsets=earliest`
+is useful only for an empty checkpoint; preserving the volume is what prevents
+old offsets from being replayed after restart.""",
             [
                 code_cell(mongo_source),
                 code_cell(checkpoint_source),
@@ -458,7 +621,46 @@ def build_task6() -> None:
 
 {table}
 
-The script temporarily restores the locked file, restores the modified bytes in a `finally` block, polls both databases, and records assertions only after every sink converges."""
+```mermaid
+sequenceDiagram
+  participant P as Parser
+  participant K as Kafka
+  participant N as Neo4j
+  participant S as Spark checkpoint
+  participant M as MongoDB
+  P->>K: Locked baseline file
+  K->>N: Replace graph state
+  K->>S: Consume metadata offset
+  S->>M: Replace file document
+  P->>K: Modified file only
+  P->>K: Force same modified bytes
+  Note over N,M: Counts and distinct IDs must remain stable
+  S-->>S: Restart with checkpoint preserved
+  P->>K: One post-restart replay
+  Note over S: First input starts at saved offset
+```
+
+## Approach and rationale
+
+**Approach:** One automation run establishes a locked baseline, applies the
+seven-line modification to exactly `optimum/version.py`, forces an unchanged
+replay, restarts Spark without deleting its checkpoint, and then publishes one
+post-restart replay. Each stage waits until Kafka, Neo4j, MongoDB, and the Spark
+checkpoint converge before taking a snapshot.
+
+**Why this approach:** The modified stage proves that stale graph elements are
+removed and new content is visible. The forced-unchanged stage isolates
+idempotency from the parser's normal hash-based skip. The restart stage proves
+recovery semantics: an unchanged checkpoint and MongoDB snapshot while idle,
+followed by a first input batch whose start offset equals the saved checkpoint,
+is stronger evidence than merely showing a larger final offset.
+
+**Alternatives and trade-offs:** Checking only total counts could hide duplicate
+IDs or rewrites of unrelated files, so the assertions also compare distinct
+IDs, content hashes, per-file counts, offsets, and a digest of the other 60
+MongoDB documents. The script temporarily restores the locked bytes and restores
+the modified bytes in a `finally` block; this adds orchestration complexity but
+keeps one reproducible diff while protecting the demonstration worktree."""
     evidence_source = """import json
 from pathlib import Path
 

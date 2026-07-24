@@ -636,6 +636,8 @@ def main() -> int:
     backup_dir = ROOT / "tmp" / "replay-backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
     backup_path = backup_dir / f"version-{datetime.now().strftime('%Y%m%d-%H%M%S')}.py.bak"
+    # This is a local crash-recovery aid, not submission evidence.  Recording
+    # its ignored path in verification.json would create a broken GitHub link.
     backup_path.write_bytes(original_bytes)
 
     output = args.output.resolve()
@@ -759,7 +761,6 @@ def main() -> int:
                 "path": REPLAY_FILE,
                 "file_id": restarted["parser"]["file_id"],
                 "git_diff": diff,
-                "backup_path": str(backup_path.relative_to(ROOT)),
             },
             "connector_status": connector_status(),
             "parser_error_fixture": parser_error_fixture,

@@ -1,6 +1,6 @@
 {
   "schema_version": "3.0",
-  "captured_at": "2026-07-24T08:47:32.375968Z",
+  "captured_at": "2026-07-24T15:09:52.938944Z",
   "repository": {
     "repo_id": "huggingface/optimum",
     "url": "https://github.com/huggingface/optimum.git",
@@ -15,8 +15,7 @@
   "replay_file": {
     "path": "optimum/version.py",
     "file_id": "867c06c1f6e594bef9a16137312503a0870399626a16dded522ce7a24143b1a7",
-    "git_diff": "diff --git a/optimum/version.py b/optimum/version.py\nindex bb061c5..a41eacc 100644\n--- a/optimum/version.py\n+++ b/optimum/version.py\n@@ -13,3 +13,10 @@\n #  limitations under the License.\n \n __version__ = \"2.2.0.dev0\"\n+\n+\n+def lab04_replay_probe(value):\n+    \"\"\"Small deterministic branch used only by the Lab 04 replay demo.\"\"\"\n+    if value > 10:\n+        return value * 2\n+    return value",
-    "backup_path": "tmp\\replay-backups\\version-20260724-154438.py.bak"
+    "git_diff": "diff --git a/optimum/version.py b/optimum/version.py\nindex bb061c5..a41eacc 100644\n--- a/optimum/version.py\n+++ b/optimum/version.py\n@@ -13,3 +13,10 @@\n #  limitations under the License.\n \n __version__ = \"2.2.0.dev0\"\n+\n+\n+def lab04_replay_probe(value):\n+    \"\"\"Small deterministic branch used only by the Lab 04 replay demo.\"\"\"\n+    if value > 10:\n+        return value * 2\n+    return value"
   },
   "connector_status": {
     "name": "cpg-neo4j-sink",
@@ -184,12 +183,12 @@
       "warnings": 0,
       "error": ""
     },
-    "mongo_offset": 262
+    "mongo_offset": 408
   },
   "stages": {
     "baseline": {
       "name": "baseline",
-      "captured_at": "2026-07-24T08:45:17.923936Z",
+      "captured_at": "2026-07-24T15:07:52.538313Z",
       "source_hash": "ac342f9e8fd3f74b822e8d7399806be6f17b733b37e1a01ae24a486ba8d330ce",
       "source_lines": 15,
       "parser": {
@@ -233,19 +232,19 @@
             "AST": 4,
             "CFG": 2
           },
-          "processed_at": "2026-07-24T08:45:02.611370Z",
-          "run_id": "48132d8db71c4fcfba0940b3c316f0c3",
-          "kafka_offset": 264
+          "processed_at": "2026-07-24T15:07:37.595394Z",
+          "run_id": "3df531fbb4b04e6187abded4c22d02ae",
+          "kafka_offset": 410
         },
         "other_documents_count": 60,
-        "other_documents_digest": "af261b6bad97801b111b28d3764f9ef0bd665208de72d923358769e54e83cdb9"
+        "other_documents_digest": "80b1e9f81a9a9d42c67f1195204b990cac32ae1ed60665c5a1e68814a7be5cc1"
       },
-      "kafka_metadata_end_offset": 266,
-      "spark_checkpoint_offset": 266
+      "kafka_metadata_end_offset": 412,
+      "spark_checkpoint_offset": 412
     },
     "modified": {
       "name": "modified",
-      "captured_at": "2026-07-24T08:45:42.296436Z",
+      "captured_at": "2026-07-24T15:08:10.772746Z",
       "source_hash": "079eca803ea5bfe068bc805997b013cc14c9ddc8629a2ec634d12bcebb6720ce",
       "source_lines": 22,
       "parser": {
@@ -290,19 +289,19 @@
             "CFG": 9,
             "DFG": 3
           },
-          "processed_at": "2026-07-24T08:45:23.233581Z",
-          "run_id": "985469e102864531aed7ffc912a78eef",
-          "kafka_offset": 266
+          "processed_at": "2026-07-24T15:07:56.349222Z",
+          "run_id": "b5eaee9231bb48049be24a852e34255a",
+          "kafka_offset": 412
         },
         "other_documents_count": 60,
-        "other_documents_digest": "af261b6bad97801b111b28d3764f9ef0bd665208de72d923358769e54e83cdb9"
+        "other_documents_digest": "80b1e9f81a9a9d42c67f1195204b990cac32ae1ed60665c5a1e68814a7be5cc1"
       },
-      "kafka_metadata_end_offset": 268,
-      "spark_checkpoint_offset": 268
+      "kafka_metadata_end_offset": 414,
+      "spark_checkpoint_offset": 414
     },
     "forced_unchanged": {
       "name": "forced_unchanged",
-      "captured_at": "2026-07-24T08:46:02.264192Z",
+      "captured_at": "2026-07-24T15:08:29.725260Z",
       "source_hash": "079eca803ea5bfe068bc805997b013cc14c9ddc8629a2ec634d12bcebb6720ce",
       "source_lines": 22,
       "parser": {
@@ -347,19 +346,19 @@
             "CFG": 9,
             "DFG": 3
           },
-          "processed_at": "2026-07-24T08:45:46.569301Z",
-          "run_id": "cdd7042458f04480b48fe1f9a71b42e2",
-          "kafka_offset": 268
+          "processed_at": "2026-07-24T15:08:14.581750Z",
+          "run_id": "73020ea47e3c4dae9661aadfbabd0101",
+          "kafka_offset": 414
         },
         "other_documents_count": 60,
-        "other_documents_digest": "af261b6bad97801b111b28d3764f9ef0bd665208de72d923358769e54e83cdb9"
+        "other_documents_digest": "80b1e9f81a9a9d42c67f1195204b990cac32ae1ed60665c5a1e68814a7be5cc1"
       },
-      "kafka_metadata_end_offset": 270,
-      "spark_checkpoint_offset": 270
+      "kafka_metadata_end_offset": 416,
+      "spark_checkpoint_offset": 416
     },
     "restart_replay": {
       "name": "restart_replay",
-      "captured_at": "2026-07-24T08:47:12.817899Z",
+      "captured_at": "2026-07-24T15:09:35.719672Z",
       "source_hash": "079eca803ea5bfe068bc805997b013cc14c9ddc8629a2ec634d12bcebb6720ce",
       "source_lines": 22,
       "parser": {
@@ -404,33 +403,33 @@
             "CFG": 9,
             "DFG": 3
           },
-          "processed_at": "2026-07-24T08:46:52.334330Z",
-          "run_id": "2c9f0ab72fdc4559ba6c7f125bac48a3",
-          "kafka_offset": 270
+          "processed_at": "2026-07-24T15:09:20.140539Z",
+          "run_id": "de2b478f74c345138e77a636e2d2d660",
+          "kafka_offset": 416
         },
         "other_documents_count": 60,
-        "other_documents_digest": "af261b6bad97801b111b28d3764f9ef0bd665208de72d923358769e54e83cdb9"
+        "other_documents_digest": "80b1e9f81a9a9d42c67f1195204b990cac32ae1ed60665c5a1e68814a7be5cc1"
       },
-      "kafka_metadata_end_offset": 272,
-      "spark_checkpoint_offset": 272
+      "kafka_metadata_end_offset": 418,
+      "spark_checkpoint_offset": 418
     }
   },
   "spark_restart": {
-    "checkpoint_before_restart": 270,
-    "checkpoint_observed_after_restart": 270,
-    "metadata_end_observed_after_restart": 270,
-    "mongo_offset_observed_after_restart": 268,
-    "other_documents_digest_after_restart": "af261b6bad97801b111b28d3764f9ef0bd665208de72d923358769e54e83cdb9",
-    "query_run_id": "fd0c7c94-5d16-4afb-8ec9-e36f30b83fc6",
+    "checkpoint_before_restart": 416,
+    "checkpoint_observed_after_restart": 416,
+    "metadata_end_observed_after_restart": 416,
+    "mongo_offset_observed_after_restart": 414,
+    "other_documents_digest_after_restart": "80b1e9f81a9a9d42c67f1195204b990cac32ae1ed60665c5a1e68814a7be5cc1",
+    "query_run_id": "6c88a298-39ac-43cb-a6fc-b99c38fef18c",
     "first_input_progress": {
-      "timestamp": "2026-07-24T08:46:55.001Z",
-      "run_id": "fd0c7c94-5d16-4afb-8ec9-e36f30b83fc6",
-      "batch_id": 23,
+      "timestamp": "2026-07-24T15:09:25.000Z",
+      "run_id": "6c88a298-39ac-43cb-a6fc-b99c38fef18c",
+      "batch_id": 38,
       "num_input_rows": 1,
-      "start_offset": 270,
-      "end_offset": 272
+      "start_offset": 416,
+      "end_offset": 418
     },
-    "checkpoint_after_replay": 272
+    "checkpoint_after_replay": 418
   },
   "neo4j_dlq_end_offset": 0,
   "assertions": {

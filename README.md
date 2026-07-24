@@ -46,7 +46,7 @@ Connector 5.5.0, Spark 3.5.7, MongoDB Spark Connector 10.7.0, and MongoDB 8.0.
 1. Install the parser, Kafka client, tests, and book tooling:
 
    ```powershell
-   python -m pip install -e ".[kafka,test,book]"
+   python -m pip install -e ".[kafka,spark,test,book]"
    ```
 
    Create an ignored local environment file and replace its placeholder secret:

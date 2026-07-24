@@ -1,3 +1,12 @@
+"""Coordinate bounded, transactional parsing for one Python source file at a time.
+
+The service owns the incremental boundary: it compares content hashes, invokes
+the file-local analyzer, publishes one Kafka transaction, and advances the
+SQLite manifest only after Kafka accepts that transaction.  Keeping those
+steps together prevents a manifest entry from claiming data that downstream
+sinks never received.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -18,11 +27,15 @@ from .publisher import Publisher, Record
 
 
 def utc_now() -> str:
+    """Return an RFC 3339 UTC timestamp suitable for every event envelope."""
+
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 @dataclass(slots=True)
 class FileProcessResult:
+    """Summarize one file without retaining its complete graph in batch memory."""
+
     path: str
     file_id: str
     content_hash: str
@@ -35,10 +48,14 @@ class FileProcessResult:
     error: str = ""
 
     def as_dict(self) -> dict[str, Any]:
+        """Convert the result to the JSON-compatible CLI representation."""
+
         return asdict(self)
 
 
 class ParserService:
+    """Parse repository files incrementally and publish idempotent CPG events."""
+
     def __init__(
         self,
         repo_path: Path,
@@ -46,6 +63,8 @@ class ParserService:
         publisher: Publisher,
         manifest: Manifest,
     ) -> None:
+        """Bind the repository identity, publisher, and durable local manifest."""
+
         self.repo_path = repo_path.resolve()
         self.repo_id = repo_id
         self.publisher = publisher
@@ -53,6 +72,12 @@ class ParserService:
         self.repo_url, self.commit_sha = git_metadata(self.repo_path)
 
     def process(self, relative_file: str | None = None, force: bool = False) -> list[FileProcessResult]:
+        """Process one requested file or every discovered file sequentially.
+
+        ``force`` republishes an unchanged file for the replay demonstration;
+        otherwise the manifest content hash makes unchanged input a cheap skip.
+        """
+
         if relative_file:
             candidate = (self.repo_path / relative_file).resolve()
             try:
@@ -67,6 +92,8 @@ class ParserService:
         return [self._process_file(path, force=force) for path in files]
 
     def _process_file(self, path: Path, force: bool) -> FileProcessResult:
+        """Analyze and atomically publish the current state of a single file."""
+
         relative = path.relative_to(self.repo_path).as_posix()
         identifier = file_id(self.repo_id, relative)
         raw = path.read_bytes()
@@ -91,8 +118,14 @@ class ParserService:
 
         node_ids = {node.id for node in analysis.nodes}
         edge_ids = {edge.id for edge in analysis.edges}
+
+        # Stable IDs turn incremental reconciliation into a set difference:
+        # anything present in the manifest but absent now must be deleted.
         stale_nodes, stale_edges = self.manifest.stale_elements(identifier, node_ids, edge_ids)
         records: list[Record] = []
+
+        # Publish stale edges before stale nodes so the Neo4j sink never has to
+        # preserve relationships whose endpoints are being removed.
         for stale_id in sorted(stale_edges):
             value = {**common, "op": "delete", "edge": {"id": stale_id}}
             value["event_id"] = stable_hash("edge", "delete", stale_id, digest)
@@ -121,6 +154,9 @@ class ParserService:
             analysis.warnings,
         )
         records.append((TOPIC_METADATA, identifier, metadata))
+
+        # Kafka is the source of truth for this transition.  Advancing SQLite
+        # only after commit means a producer failure is safely retryable.
         self.publisher.publish_transaction(records)
         self.manifest.replace_file(identifier, digest, event_time, node_ids, edge_ids)
         return FileProcessResult(
@@ -145,6 +181,13 @@ class ParserService:
         common: dict[str, Any],
         exc: Exception,
     ) -> FileProcessResult:
+        """Publish a recoverable parser error and remove the file's stale graph.
+
+        A malformed replacement must not leave the previously valid graph
+        visible downstream, so error handling uses the same transaction rule as
+        successful parsing.
+        """
+
         line = getattr(exc, "lineno", 0) or 0
         column = getattr(exc, "offset", 0) or 0
         error_identifier = stable_hash(identifier, digest, type(exc).__name__, line, column)
@@ -167,6 +210,9 @@ class ParserService:
         stale_edges = self.manifest.previous_elements(identifier, "edge")
         stale_nodes = self.manifest.previous_elements(identifier, "node")
         records: list[Record] = []
+
+        # Delete topology first, then publish the error and replacement metadata
+        # in the same transaction so consumers never observe a half-transition.
         for stale_id in sorted(stale_edges):
             value = {**common, "op": "delete", "edge": {"id": stale_id}}
             value["event_id"] = stable_hash("edge", "delete", stale_id, digest)
@@ -203,6 +249,8 @@ class ParserService:
         warnings: list[str],
         error_message: str = "",
     ) -> dict[str, Any]:
+        """Build the single MongoDB-oriented metadata event for a file state."""
+
         text = raw.decode("utf-8", errors="replace")
         metadata = {
             "_id": identifier,
@@ -228,4 +276,6 @@ class ParserService:
 
 
 def transactional_id(repo_id: str) -> str:
+    """Create a producer-unique transactional ID scoped to the repository."""
+
     return f"lab04-{stable_hash(repo_id)[:12]}-{os.getpid()}"
