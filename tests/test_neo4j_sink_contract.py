@@ -48,6 +48,7 @@ def test_dlq_constraints_and_registration_contract():
 
     assert 'name="cpg-neo4j-sink"' in register
     assert "-X PUT" in register and "-X POST" in register
+    assert "/bin/sh /config/register.sh" in wait
     assert '"connector":{"state":"RUNNING"' in wait
     assert '"tasks":\\[{"id":0,"state":"RUNNING"' in wait
 

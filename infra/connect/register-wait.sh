@@ -6,7 +6,7 @@ name="cpg-neo4j-sink"
 
 # Connector creation and task startup are asynchronous. The original register
 # call may observe a short-lived 404 immediately after a successful POST.
-/config/register.sh || true
+/bin/sh /config/register.sh || true
 
 attempt=1
 while [ "$attempt" -le 30 ]; do
