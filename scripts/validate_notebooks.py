@@ -70,7 +70,11 @@ def main() -> int:
             failures.append(f"{name}: missing embedded figure or database UI capture")
         if "## Reflection" not in markdown:
             failures.append(f"{name}: missing Reflection section")
-        for label in ("**Worked:**", "**Failed:**", "**Resolution:**"):
+        for label in (
+            "**Worked:**",
+            "**Issue encountered during development:**",
+            "**Resolution:**",
+        ):
             if label not in markdown:
                 failures.append(f"{name}: reflection missing {label}")
         code_cells = [cell for cell in nb.get("cells", []) if cell.get("cell_type") == "code"]

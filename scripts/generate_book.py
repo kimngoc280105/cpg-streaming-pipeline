@@ -164,7 +164,7 @@ print('PASS: all required architecture services are declared')"""
             [code_cell(services_source)],
             """**Worked:** Kafka Connect and Spark operate on separate branches, so graph topology never passes through Spark.
 
-**Failed:** Connector creation was asynchronous and an immediate status request could observe a temporary 404.
+**Issue encountered during development:** Connector creation was asynchronous and an immediate status request could observe a temporary 404.
 
 **Resolution:** `register-wait.sh` now retries until both the connector and its task are `RUNNING`. Single-node Kafka and replication factor one remain documented educational limits.""",
         ),
@@ -245,7 +245,7 @@ listed so the scope remains transparent.""",
             [code_cell(source)],
             f"""**Worked:** The shallow clone reports {repository['raw_python_files']} raw Python files and {repository['processed_python_files']} processed files with full parseability.
 
-**Failed:** A plain shallow clone of a moving default branch could change the file counts, and the replay edit made the current line count differ from the baseline.
+**Issue encountered during development:** A plain shallow clone of a moving default branch could change the file counts, and the replay edit made the current line count differ from the baseline.
 
 **Resolution:** The bootstrap script fetches and checks out the recorded commit, while the report records baseline and modified line counts separately.""",
         ),
@@ -351,7 +351,7 @@ external nodes expose those limits instead of overstating accuracy.""",
             [code_cell(aggregate_source), code_cell(tests_source)],
             """**Worked:** Deterministic IDs, all four CPG edge categories, bounded file-by-file processing, and stale-element reconciliation pass the regression suite.
 
-**Failed:** Syntax errors originally risked leaving the last valid graph in Neo4j, while attribute calls and `AugAssign`/`del` produced misleading static-analysis results.
+**Issue encountered during development:** Syntax errors originally risked leaving the last valid graph in Neo4j, while attribute calls and `AugAssign`/`del` produced misleading static-analysis results.
 
 **Resolution:** Error transactions now delete stale elements and update the manifest; dynamic attribute calls remain external, and DFG transfer functions explicitly model augmented reads and deletion kills. Aliasing and runtime dispatch remain documented limits.""",
         ),
@@ -430,7 +430,7 @@ ordering is intentionally handled by idempotent sinks.""",
             [code_cell(topics_source), code_cell(samples_source)],
             """**Worked:** All required topics have the intended partition, replication, cleanup policy, keyed records, schema version, and UTC event time.
 
-**Failed:** In-memory samples proved serialization but did not prove that Kafka had accepted and exposed the records.
+**Issue encountered during development:** In-memory samples proved serialization but did not prove that Kafka had accepted and exposed the records.
 
 **Resolution:** Replay capture now publishes an invalid fixture and stores `read_committed` samples consumed from the live broker for node, edge, metadata, and parser-error topics. Compaction is combined with stable keys and idempotent sinks.""",
         ),
@@ -516,7 +516,7 @@ provide eventual convergence with a simpler, retry-safe connector.""",
             ],
             """**Worked:** Connector/task status, total-versus-distinct IDs, all edge kinds, the Browser graph, and an empty DLQ independently confirm direct graph ingestion.
 
-**Failed:** Connector registration initially raced the asynchronous REST API and could finish before the task reached `RUNNING`.
+**Issue encountered during development:** Connector registration initially raced the asynchronous REST API and could finish before the task reached `RUNNING`.
 
 **Resolution:** Registration is idempotent and followed by bounded status polling; edge Cypher creates placeholder endpoints so cross-topic arrival order cannot lose relationships.""",
         ),
@@ -589,7 +589,7 @@ old offsets from being replayed after restart.""",
             ],
             """**Worked:** Spark consumes only metadata, MongoDB maintains one `_id=file_id` document per source file, and the checkpoint reaches the Kafka end offset.
 
-**Failed:** First startup was slow while resolving connector packages, and document counts alone could not distinguish replacement from duplication.
+**Issue encountered during development:** First startup was slow while resolving connector packages, and document counts alone could not distinguish replacement from duplication.
 
 **Resolution:** A persistent Ivy cache and checkpoint volume support restart, while distinct-ID counts, content hashes, Kafka offsets, and replacement-upsert settings verify the sink behavior.""",
         ),
@@ -731,7 +731,7 @@ print('PASS: live final state matches the captured restart-replay stage')"""
             [code_cell(evidence_source), code_cell(diff_source), code_cell(live_source)],
             """**Worked:** Modified and forced-unchanged replays converge to unique Neo4j IDs and one updated MongoDB document without changing the other 60 documents.
 
-**Failed:** Before/after checkpoint numbers alone did not prove that the restarted Spark query skipped previously committed offsets.
+**Issue encountered during development:** Before/after checkpoint numbers alone did not prove that the restarted Spark query skipped previously committed offsets.
 
 **Resolution:** The Spark listener now records the restarted query run and its first input batch; the evidence verifies that the batch starts exactly at the saved checkpoint, while an idle pre-publish snapshot proves MongoDB was unchanged.""",
         ),
