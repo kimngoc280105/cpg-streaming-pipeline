@@ -1,0 +1,17 @@
+title: Lab 04 - Incremental CPG Streaming
+author: Lab 04 Team
+logo: ""
+
+execute:
+  execute_notebooks: "off"
+
+html:
+  home_page_in_navbar: true
+  use_issues_button: false
+  use_repository_button: true
+  repository_url: https://github.com/kimngoc280105/cpg-streaming-pipeline
+
+parse:
+  myst_enable_extensions:
+    - colon_fence
+    - dollarmath
