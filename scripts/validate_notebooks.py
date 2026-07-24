@@ -53,25 +53,26 @@ def main() -> int:
             failures.append(f"{name}: missing nbclient provenance")
         if provenance.get("evidence_sha256") != digest:
             failures.append(f"{name}: evidence hash does not match verification.json")
-        markdown_cells = [
+        markdown = "\n".join(
             "".join(cell.get("source", []))
             for cell in nb.get("cells", [])
             if cell.get("cell_type") == "markdown"
-        ]
-        markdown = "\n".join(markdown_cells)
-
-        # Narrative quality is a human-review concern; the validator guards
-        # substance without forcing every chapter into identical label text.
-        if not markdown_cells or len(markdown_cells[0].split()) < 120:
-            failures.append(f"{name}: opening narrative is too short")
+        )
+        for label in (
+            "## Approach and rationale",
+            "**Approach:**",
+            "**Why this approach:**",
+            "**Alternatives and trade-offs:**",
+        ):
+            if label not in markdown:
+                failures.append(f"{name}: narrative missing {label}")
         if "```mermaid" not in markdown and "![" not in markdown:
             failures.append(f"{name}: missing embedded figure or database UI capture")
         if "## Reflection" not in markdown:
             failures.append(f"{name}: missing Reflection section")
-        else:
-            reflection = markdown.rsplit("## Reflection", 1)[1]
-            if len(reflection.split()) < 45:
-                failures.append(f"{name}: reflection is too short")
+        for label in ("**Worked:**", "**Failed:**", "**Resolution:**"):
+            if label not in markdown:
+                failures.append(f"{name}: reflection missing {label}")
         code_cells = [cell for cell in nb.get("cells", []) if cell.get("cell_type") == "code"]
         if not code_cells:
             failures.append(f"{name}: no code cells")

@@ -126,21 +126,24 @@ flowchart LR
 Graph topology goes directly from Kafka Connect to Neo4j. Spark is used only
 for source metadata; parser failures and connector failures have separate paths.
 
-## Why the pipeline is split
+## Approach and rationale
 
-The graph and metadata paths solve different problems. Neo4j needs individual
-nodes and relationships, whereas MongoDB needs one current document for each
-source file. Keeping those contracts separate at Kafka lets the Neo4j connector
-consume topology directly and leaves Spark responsible only for metadata and
-its checkpoint. It also means that a parser failure or a bad connector record
-has its own visible error path instead of blocking valid traffic.
+**Approach:** The pipeline separates graph topology, source metadata, parser
+errors, and connector failures at the Kafka boundary. Kafka Connect owns the
+node/edge branch, while one Spark Structured Streaming query owns only the
+metadata branch and persists its checkpoint on a Docker volume.
 
-We considered sending every event through one Spark job. That would reduce the
-number of arrows in the diagram, but it would also couple two unrelated schemas
-and make Spark an unnecessary relay for Neo4j, contrary to the assignment. The
-single broker, one partition per topic, and replication factor one are deliberate
-demo choices: they make ordering and replay easier to inspect, but they are not
-presented as a production deployment."""
+**Why this approach:** The split follows the assignment's required sink paths
+and gives each consumer the smallest possible contract. Sending topology
+directly through Kafka Connect avoids an unnecessary Spark transformation and
+keeps Neo4j ingestion independent from metadata analytics. Separate error paths
+prevent a malformed source file or sink record from stopping valid traffic.
+
+**Alternatives and trade-offs:** A single topic or a Spark job for both sinks
+would reduce the number of components but couple unrelated schemas, recovery
+semantics, and failure handling. One partition and one broker make ordering and
+the classroom demonstration reproducible, at the cost of throughput and
+production-grade availability."""
     services_source = """import subprocess
 from pathlib import Path
 
@@ -159,14 +162,11 @@ print('PASS: all required architecture services are declared')"""
             "Architecture",
             diagram,
             [code_cell(services_source)],
-            """The final run confirmed that topology reaches Neo4j without
-passing through Spark, while metadata advances independently through the Spark
-checkpoint. The first connector startup exposed an integration race: Kafka
-Connect accepted the registration request before its task was ready, so an
-immediate status check sometimes returned 404. `register-wait.sh` now retries
-until both the connector and task report `RUNNING`. The remaining limitation is
-intentional and visible in the diagram: this is a single-node teaching stack,
-not a highly available Kafka deployment.""",
+            """**Worked:** Kafka Connect and Spark operate on separate branches, so graph topology never passes through Spark.
+
+**Failed:** Connector creation was asynchronous and an immediate status request could observe a temporary 404.
+
+**Resolution:** `register-wait.sh` now retries until both the connector and its task are `RUNNING`. Single-node Kafka and replication factor one remain documented educational limits.""",
         ),
     )
 
@@ -225,29 +225,29 @@ flowchart LR
   F --> P[Parseability and feature scan]
 ```
 
-## Reproducible repository scope
+## Approach and rationale
 
-The bootstrap script uses a depth-one clone and then checks out the recorded
-Optimum commit. Pinning matters more than simply recording the URL: if the
-default branch moved, both the discovered-file count and every downstream CPG
-count could change. The report therefore keeps the locked baseline separate
-from the seven lines added later for the replay demonstration.
+**Approach:** The bootstrap script performs a depth-one clone, pins the selected
+Optimum commit, reports both raw and filtered Python counts, and applies one
+explicit exclusion policy before parsing. The report preserves the locked
+baseline count separately from the seven-line replay modification.
 
-Discovery reports two numbers on purpose. The raw count shows every Python file
-that exists at the selected commit; the processed count applies the documented
-test, setup, build, and generated-file exclusions. This makes the optional
-filtering auditable. Vendoring the full third-party tree would make the
-submission larger without improving reproducibility, while processing every
-generated or test file would increase runtime and obscure the chosen scope.""",
+**Why this approach:** A moving default branch would make counts and CPG
+evidence impossible to reproduce. Shallow cloning satisfies the download-size
+requirement, while reporting raw and filtered counts makes optional exclusions
+auditable rather than silently changing the denominator.
+
+**Alternatives and trade-offs:** Vendoring the third-party repository would make
+the submission self-contained but duplicate unrelated source and history.
+Processing tests and generated files could increase coverage, but it would add
+noise and cost without improving the demonstration; excluded paths are therefore
+listed so the scope remains transparent.""",
             [code_cell(source)],
-            f"""The locked clone produced {repository['raw_python_files']} raw
-Python files and {repository['processed_python_files']} files after filtering,
-and every processed file parsed successfully. An early version relied on the
-current default branch, which made the recorded counts vulnerable to upstream
-changes; the replay edit also made a single “total lines” number ambiguous.
-Fetching the recorded commit fixed the first problem, and reporting baseline
-and modified line counts separately fixed the second. The exclusion list remains
-part of the output so that another team can reproduce exactly the same scope.""",
+            f"""**Worked:** The shallow clone reports {repository['raw_python_files']} raw Python files and {repository['processed_python_files']} processed files with full parseability.
+
+**Failed:** A plain shallow clone of a moving default branch could change the file counts, and the replay edit made the current line count differ from the baseline.
+
+**Resolution:** The bootstrap script fetches and checks out the recorded commit, while the report records baseline and modified line counts separately.""",
         ),
     )
 
@@ -329,38 +329,31 @@ flowchart LR
   T --> M[Manifest advances after commit]
 ```
 
-## Parser strategy and its limits
+## Approach and rationale
 
-Python's standard `ast` module was the pragmatic choice for this repository: it
-preserves every syntax node required by the lab and introduces no separate
-runtime. Joern could provide deeper interprocedural analysis, and tree-sitter
-would be attractive for mixed Python versions, but either choice would add
-integration work without removing the need to define stable IDs and replay
-semantics ourselves.
+**Approach:** Each file is decoded, analyzed, reconciled against its previous
+stable node and edge IDs, and emitted in one Kafka transaction. AST field/index
+paths define identity; the CFG models statement flow; DFG uses a bounded
+per-scope fixed point; unresolved definitions and calls become explicit external
+nodes rather than guessed targets.
 
-Incrementality is enforced at the file boundary. A file is decoded, analyzed,
-compared with its previous stable node and edge sets, and published in one Kafka
-transaction before the SQLite manifest advances. This order is important:
-updating the manifest first could make a failed Kafka transaction look complete.
-Processing and then releasing one graph bounds analysis memory by the largest
-file rather than by the repository.
+**Why this approach:** The standard-library AST is available without a heavy
+Joern runtime and preserves every Python syntax node needed by the lab.
+File-local passes bound graph memory by the largest source file. Structural IDs,
+stale deletes, and updating SQLite only after Kafka commits jointly make retries
+idempotent and recoverable.
 
-The semantic passes are deliberately conservative. Structural AST paths define
-identity, CFG edges represent statement-level control, and a bounded
-reaching-definitions fixed point supplies DFG edges within each lexical scope.
-When a definition or call target cannot be proved locally, the graph records an
-external node instead of guessing. Alias analysis, precise exception dispatch,
-and dynamic method resolution remain explicit limitations.""",
+**Alternatives and trade-offs:** Joern offers deeper interprocedural semantics
+and tree-sitter offers robust multi-version parsing, but both add integration
+cost beyond the laboratory scope. The chosen analysis deliberately sacrifices
+alias analysis, precise exception flow, and dynamic dispatch; warnings and
+external nodes expose those limits instead of overstating accuracy.""",
             [code_cell(aggregate_source), code_cell(tests_source)],
-            """The regression run produced deterministic IDs and all four CPG
-edge categories while processing files one at a time. Two weaknesses surfaced
-during fixture testing. A syntax error could leave the previous valid graph
-visible, and the first DFG implementation mishandled augmented assignments and
-deletions. Error transactions now remove stale topology before publishing error
-metadata, while the transfer functions model the implicit read in `x += value`
-and the kill caused by `del`. Attribute calls still remain external because
-resolving them without type information would create more misleading edges than
-useful ones.""",
+            """**Worked:** Deterministic IDs, all four CPG edge categories, bounded file-by-file processing, and stale-element reconciliation pass the regression suite.
+
+**Failed:** Syntax errors originally risked leaving the last valid graph in Neo4j, while attribute calls and `AugAssign`/`del` produced misleading static-analysis results.
+
+**Resolution:** Error transactions now delete stale elements and update the manifest; dynamic attribute calls remain external, and DFG transfer functions explicitly model augmented reads and deletion kills. Aliasing and runtime dispatch remain documented limits.""",
         ),
     )
 
@@ -415,35 +408,31 @@ flowchart TB
   M --> S[Spark Structured Streaming]
 ```
 
-## Topic boundaries and replay semantics
+## Approach and rationale
 
-The four required event families are separated because their consumers and
-retention needs are different. Neo4j subscribes to nodes and edges, Spark reads
-metadata, and parser failures remain available for diagnosis without being
-treated as graph state. Node, edge, and metadata topics use stable entity keys
-with compaction; the error topic instead uses time-based retention.
+**Approach:** The four required event families use separate, explicitly created
+topics. Node, edge, and metadata records use stable entity keys and compaction;
+parser errors use time-based delete retention. Every JSON envelope carries
+versioning, UTC event time, repository/file/run identity, content hash, and an
+operation.
 
-Every JSON envelope repeats the information needed to interpret it independently:
-schema version, UTC event time, repository and file identity, run ID, content
-hash, and operation. Stable keys are what allow compaction, Neo4j `MERGE`, and
-MongoDB replacement upserts to converge after replay. A single multiplexed
-topic would be easier to create but would force both downstream systems to
-filter unrelated schemas.
+**Why this approach:** Neo4j and Spark need different schemas, retention, and
+failure handling. Stable keys let compaction and downstream `MERGE`/upsert
+converge on the latest entity state, while retaining parser errors preserves an
+audit trail without treating an error as graph state.
 
-For a larger platform we would prefer a Schema Registry and multiple partitions.
-Here, versioned JSON Schemas and contract tests keep the environment
-self-contained, while one partition per topic makes the replay sequence easy to
-inspect. There is still no assumed ordering between different topics; the sink
-design handles that explicitly.""",
+**Alternatives and trade-offs:** A single multiplexed topic would simplify topic
+creation but force every consumer to filter unrelated records and weaken schema
+isolation. A Schema Registry would provide stronger centralized governance; for
+this self-contained lab, versioned JSON Schemas and contract tests keep setup
+smaller. One partition per topic favors deterministic replay, while cross-topic
+ordering is intentionally handled by idempotent sinks.""",
             [code_cell(topics_source), code_cell(samples_source)],
-            """Topic inspection confirmed the intended partition count,
-replication factor, cleanup policies, keys, schema versions, and UTC timestamps.
-Our first evidence consisted of records captured before publication, which only
-proved that Python could serialize them. The replay script now publishes an
-invalid fixture and then consumes `read_committed` samples back from the live
-broker for all four required topics. That change turned the chapter from a
-contract demonstration into evidence that Kafka actually accepted and exposed
-the records.""",
+            """**Worked:** All required topics have the intended partition, replication, cleanup policy, keyed records, schema version, and UTC event time.
+
+**Failed:** In-memory samples proved serialization but did not prove that Kafka had accepted and exposed the records.
+
+**Resolution:** Replay capture now publishes an invalid fixture and stores `read_committed` samples consumed from the live broker for node, edge, metadata, and parser-error topics. Compaction is combined with stable keys and idempotent sinks.""",
         ),
     )
 
@@ -500,39 +489,36 @@ print('PASS: Neo4j connector DLQ is empty')"""
 use `MERGE`, create placeholder endpoints when necessary, and reconcile delete
 events without Spark.
 
-## Direct graph ingestion
+## Approach and rationale
 
-The Neo4j sink subscribes only to `cpg.nodes.v1` and `cpg.edges.v1`; metadata
-never enters this branch. That boundary is both an assignment requirement and a
-useful design constraint, because it prevents Spark from becoming a graph relay.
-Stable IDs are used in Cypher `MERGE` operations, explicit delete events remove
-obsolete topology, and a uniqueness constraint provides a second guard against
-duplicate nodes.
+**Approach:** A dedicated Neo4j Kafka Sink subscribes only to
+`cpg.nodes.v1` and `cpg.edges.v1`. One generic `CPGNode` label and one
+`CPG_EDGE` relationship type carry semantic kinds as properties. Cypher
+handlers `MERGE` by stable ID, create missing endpoints for out-of-order edge
+arrival, and process explicit delete events. A uniqueness constraint protects
+node IDs and the connector routes failures to a DLQ.
 
-Node and edge topics do not share a global arrival order. Rather than delaying
-all edges until a separate coordination step proves every endpoint exists, the
-edge handler creates placeholder `CPGNode` endpoints. A later node event merges
-properties into the same ID. This makes retries and cross-topic ordering
-converge without an external buffer.
+**Why this approach:** Direct Kafka Connect ingestion is an explicit assignment
+constraint and avoids making Spark a graph relay. Property-based kinds keep the
+Cypher handlers static and compatible, while placeholder endpoints remove any
+false assumption that separate node and edge topics arrive in lockstep.
 
-We kept one generic node label and relationship type, with AST/CFG/DFG/CALL
-kinds stored as properties. Dynamic labels would produce prettier Browser
-queries, but they complicate parameterized connector Cypher and schema changes.
-Failed records go to a dedicated DLQ so that connector tolerance cannot silently
-hide ingestion errors.""",
+**Alternatives and trade-offs:** Dynamic Neo4j labels and relationship types
+would look more natural in Browser queries but complicate parameterized sink
+Cypher and schema evolution. Waiting for every node before consuming edges
+would require cross-topic coordination; placeholders plus later node `MERGE`
+provide eventual convergence with a simpler, retry-safe connector.""",
             [
                 code_cell(status_source),
                 code_cell(counts_source),
                 code_cell(dlq_source),
                 image_cell("neo4j-browser.png", "Neo4j Browser showing CPG nodes and relationships"),
             ],
-            """The connector and its task remained `RUNNING`, total counts
-matched distinct IDs, every graph edge kind was present, and the DLQ stayed
-empty. The Neo4j Browser image provides a separate visual check of the resulting
-topology. The main failure occurred during registration: the REST request could
-return before the asynchronous task reached a runnable state. Registration is
-now idempotent and followed by bounded polling, which distinguishes “request
-accepted” from “sink ready” and makes repeated stack startup reliable.""",
+            """**Worked:** Connector/task status, total-versus-distinct IDs, all edge kinds, the Browser graph, and an empty DLQ independently confirm direct graph ingestion.
+
+**Failed:** Connector registration initially raced the asynchronous REST API and could finish before the task reached `RUNNING`.
+
+**Resolution:** Registration is idempotent and followed by bounded status polling; edge Cypher creates placeholder endpoints so cross-topic arrival order cannot lose relationships.""",
         ),
     )
 
@@ -573,27 +559,26 @@ print('PASS: Spark checkpoint has consumed the metadata topic')"""
 schema, and writes replacement upserts keyed by `_id=file_id`. Its checkpoint
 is retained on a Docker volume.
 
-## Why metadata goes through Spark
+## Approach and rationale
 
-Metadata is naturally modeled as one current document per source file, unlike
-the many nodes and edges stored in Neo4j. The streaming query therefore reads
-only `cpg.source-metadata.v1`, applies an explicit nested schema, and uses the
-MongoDB connector to replace/upsert `_id=file_id`. Replacement is important:
-an append-only collection would preserve history but would fail the lab's
-no-duplication final-state requirement, while partial updates could leave stale
-fields behind.
+**Approach:** One Spark Structured Streaming query reads the metadata topic with
+an explicit nested schema and `read_committed` isolation. The MongoDB connector
+uses replacement upserts with `_id=file_id`; Kafka offsets are stored in each
+document as evidence, while Spark recovery state lives in a persistent
+checkpoint volume.
 
-Spark owns progress through a persistent checkpoint volume instead of through a
-custom offset table. `startingOffsets=earliest` matters only when that checkpoint
-is empty; after the first run, the saved offsets decide where processing resumes.
-Each MongoDB document also records its Kafka offset, which makes the relationship
-between source progress and the visible document inspectable.
+**Why this approach:** Metadata is naturally one document per source file, so a
+replacement upsert expresses the desired latest-state model and prevents field
+fragments from surviving an update. An explicit schema surfaces incompatible
+events early. The checkpoint, rather than an application-maintained offset,
+lets Spark resume with its own checkpointed offset and progress protocol.
 
-A custom `foreachBatch` writer could implement the same policy, but the official
-MongoDB Spark Connector already provides replacement upserts and reduces the
-amount of recovery code we would have to maintain. The explicit schema and
-`read_committed` isolation trade some flexibility for earlier detection of
-incompatible or uncommitted events.""",
+**Alternatives and trade-offs:** Append-only MongoDB writes would retain event
+history but violate the required no-duplication final state. `foreachBatch`
+could implement custom writes, yet the MongoDB Spark Connector already supplies
+the required sink semantics with less custom code. `startingOffsets=earliest`
+is useful only for an empty checkpoint; preserving the volume is what prevents
+old offsets from being replayed after restart.""",
             [
                 code_cell(mongo_source),
                 code_cell(checkpoint_source),
@@ -602,14 +587,11 @@ incompatible or uncommitted events.""",
                     "MongoDB UI capture of the replay file; the executable output above verifies the final live offset and checkpoint",
                 ),
             ],
-            """The final collection contains one `_id=file_id` document for
-each processed source file, and the checkpoint reaches the metadata topic's end
-offset. First startup was noticeably slower because Spark had to resolve the
-Kafka and MongoDB packages; persisting the Ivy cache removed that repeated cost.
-We also learned that a document count alone is weak evidence: the same count can
-hide accidental rewrites or stale content. The chapter now pairs distinct-ID
-counts with the replay file's content hash, Kafka offset, and checkpoint so the
-replacement behavior can be verified rather than inferred.""",
+            """**Worked:** Spark consumes only metadata, MongoDB maintains one `_id=file_id` document per source file, and the checkpoint reaches the Kafka end offset.
+
+**Failed:** First startup was slow while resolving connector packages, and document counts alone could not distinguish replacement from duplication.
+
+**Resolution:** A persistent Ivy cache and checkpoint volume support restart, while distinct-ID counts, content hashes, Kafka offsets, and replacement-upsert settings verify the sink behavior.""",
         ),
     )
 
@@ -658,30 +640,27 @@ sequenceDiagram
   Note over S: First input starts at saved offset
 ```
 
-## What the four stages prove
+## Approach and rationale
 
-The baseline first restores the locked version of `optimum/version.py`; without
-that reference point, a later count difference would have no reproducible
-meaning. The modified stage then adds the seven-line probe and processes only
-that file, demonstrating both stale-element deletion and the new graph state.
-Next, the same modified bytes are forced through the parser again. This stage is
-necessary because the normal content-hash shortcut would otherwise skip the
-file and never exercise downstream idempotency.
+**Approach:** One automation run establishes a locked baseline, applies the
+seven-line modification to exactly `optimum/version.py`, forces an unchanged
+replay, restarts Spark without deleting its checkpoint, and then publishes one
+post-restart replay. Each stage waits until Kafka, Neo4j, MongoDB, and the Spark
+checkpoint converge before taking a snapshot.
 
-The final stage restarts Spark without removing its checkpoint. Before another
-record is published, the automation records that both the checkpoint and the
-MongoDB state remain unchanged. It then sends one metadata event and inspects
-the restarted query's first input batch. A start offset equal to the saved
-checkpoint is stronger evidence of correct recovery than simply showing that
-the final offset increased.
+**Why this approach:** The modified stage proves that stale graph elements are
+removed and new content is visible. The forced-unchanged stage isolates
+idempotency from the parser's normal hash-based skip. The restart stage proves
+recovery semantics: an unchanged checkpoint and MongoDB snapshot while idle,
+followed by a first input batch whose start offset equals the saved checkpoint,
+is stronger evidence than merely showing a larger final offset.
 
-Counts alone are not enough for this argument: duplicates can leave totals
-plausible, and an implementation could rewrite unrelated MongoDB documents.
-The assertions therefore compare total and distinct IDs, per-file counts,
-content hashes, Kafka offsets, and a digest of the other 60 documents. The
-script temporarily swaps the baseline and modified bytes, then restores the
-demonstration version in a `finally` block so a failed run cannot silently
-destroy the prepared worktree."""
+**Alternatives and trade-offs:** Checking only total counts could hide duplicate
+IDs or rewrites of unrelated files, so the assertions also compare distinct
+IDs, content hashes, per-file counts, offsets, and a digest of the other 60
+MongoDB documents. The script temporarily restores the locked bytes and restores
+the modified bytes in a `finally` block; this adds orchestration complexity but
+keeps one reproducible diff while protecting the demonstration worktree."""
     evidence_source = """import json
 from pathlib import Path
 
@@ -750,15 +729,11 @@ print('PASS: live final state matches the captured restart-replay stage')"""
             "Task 6 - Idempotent replay verification",
             intro,
             [code_cell(evidence_source), code_cell(diff_source), code_cell(live_source)],
-            """Both the modified and forced-unchanged stages converged to
-unique Neo4j IDs and one current MongoDB document, while the digest of the other
-60 documents stayed unchanged. The first version of this experiment compared
-only checkpoint numbers before and after restart. That showed progress, but it
-did not prove where the new Spark query began reading. A progress listener now
-captures the restarted query ID and first non-empty batch; its start offset
-matches the saved checkpoint. Combined with the idle pre-publish snapshot, this
-closes the gap between “the numbers increased” and evidence that previously
-committed offsets were actually skipped.""",
+            """**Worked:** Modified and forced-unchanged replays converge to unique Neo4j IDs and one updated MongoDB document without changing the other 60 documents.
+
+**Failed:** Before/after checkpoint numbers alone did not prove that the restarted Spark query skipped previously committed offsets.
+
+**Resolution:** The Spark listener now records the restarted query run and its first input batch; the evidence verifies that the batch starts exactly at the saved checkpoint, while an idle pre-publish snapshot proves MongoDB was unchanged.""",
         ),
     )
 
