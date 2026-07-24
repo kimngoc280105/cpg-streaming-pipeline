@@ -17,9 +17,9 @@ GitHub Pages enablement and incognito review still require the team's account.
 3. Run a graph query scoped to the replay file ID printed in
    `evidence/runtime/verification.json`, then save the result as
    `book/figures/neo4j-browser.png`.
-4. Open MongoDB Compass with `mongodb://localhost:27017`, select
-   `lab04.source_metadata`, and filter on the replay file `_id`. Save the final
-   document as `book/figures/mongodb-ui.png`.
+4. Open a MongoDB UI against `mongodb://localhost:27017` (MongoDB Compass or
+   Mongo Express), select `lab04.source_metadata`, and filter on the replay file
+   `_id`. Save the final document as `book/figures/mongodb-ui.png`.
 5. Execute the notebooks, validate provenance, and build:
 
    ```powershell

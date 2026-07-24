@@ -21,7 +21,7 @@ the submission repository.
 
 | Check | Result |
 |---|---:|
-| Unit, contract, and evidence tests | 13 passed |
+| Unit, contract, and evidence tests | 19 passed |
 | Python discovery | 74 raw / 61 processed / 13,807 lines |
 | Python AST parse rate | 61/61 (100%) |
 | Baseline Neo4j nodes | 62,375 unique / 62,375 total |

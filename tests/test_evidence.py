@@ -114,7 +114,7 @@ def test_complete_replay_evidence_assertions_pass():
     jsonschema.validate(contract, schema)
 
 
-def test_generator_creates_source_only_notebooks(monkeypatch):
+def test_generator_builds_valid_pre_execution_notebooks(monkeypatch):
     import generate_book
 
     baseline = stage("baseline", "a" * 64, 100, 150, 10, 12)
