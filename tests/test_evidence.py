@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from capture_replay_evidence import sha256_file_id, validate_evidence  # noqa: E402
+from capture_replay_evidence import _progress_offset, sha256_file_id, validate_evidence  # noqa: E402
 from cpg_parser.ids import file_id  # noqa: E402
 
 
@@ -43,10 +43,47 @@ def stage(name, source_hash, nodes, edges, offset, checkpoint):
     }
 
 
+def kafka_samples():
+    topics = (
+        "cpg.nodes.v1",
+        "cpg.edges.v1",
+        "cpg.source-metadata.v1",
+        "cpg.parser-errors.v1",
+    )
+    return {
+        topic: {
+            "source": "Kafka broker via read_committed kafka-console-consumer",
+            "key": "k",
+            "value": {
+                "schema_version": "1.0",
+                "event_time": "2026-07-22T00:00:00Z",
+            },
+        }
+        for topic in topics
+    }
+
+
 def test_capture_file_id_matches_parser_contract():
     assert sha256_file_id("huggingface/optimum", "optimum/version.py") == file_id(
         "huggingface/optimum", "optimum/version.py"
     )
+
+
+def test_progress_offset_accepts_spark_dict_and_json_string_shapes():
+    direct = {
+        "sources": [
+            {
+                "startOffset": {"cpg.source-metadata.v1": {"0": 16}},
+                "endOffset": {"cpg.source-metadata.v1": {"0": 18}},
+            }
+        ]
+    }
+    encoded = deepcopy(direct)
+    encoded["sources"][0]["startOffset"] = '{"cpg.source-metadata.v1":{"0":16}}'
+
+    assert _progress_offset(direct, "startOffset") == 16
+    assert _progress_offset(encoded, "startOffset") == 16
+    assert _progress_offset(direct, "endOffset") == 18
 
 
 def test_complete_replay_evidence_assertions_pass():
@@ -67,13 +104,29 @@ def test_complete_replay_evidence_assertions_pass():
     restarted["kafka_metadata_end_offset"] = 18
     evidence = {
         "repository": {"processed_python_files": 61},
+        "kafka_samples": kafka_samples(),
         "stages": {
             "baseline": baseline,
             "modified": modified,
             "forced_unchanged": unchanged,
             "restart_replay": restarted,
         },
-        "spark_restart": {"checkpoint_before_restart": 16},
+        "spark_restart": {
+            "checkpoint_before_restart": 16,
+            "checkpoint_observed_after_restart": 16,
+            "metadata_end_observed_after_restart": 16,
+            "mongo_offset_observed_after_restart": 14,
+            "other_documents_digest_after_restart": "same",
+            "query_run_id": "run-1",
+            "first_input_progress": {
+                "timestamp": "2026-07-22T00:00:00Z",
+                "run_id": "run-1",
+                "batch_id": 10,
+                "num_input_rows": 1,
+                "start_offset": 16,
+                "end_offset": 18,
+            },
+        },
         "neo4j_dlq_end_offset": 0,
     }
     assertions = validate_evidence(evidence)
@@ -86,7 +139,7 @@ def test_complete_replay_evidence_assertions_pass():
     contract = deepcopy(evidence)
     contract.update(
         {
-            "schema_version": "2.0",
+            "schema_version": "3.0",
             "captured_at": "2026-07-22T00:00:00Z",
             "replay_file": {
                 "path": "optimum/version.py",
@@ -94,6 +147,7 @@ def test_complete_replay_evidence_assertions_pass():
                 "git_diff": "diff --git a/optimum/version.py b/optimum/version.py",
             },
             "connector_status": {},
+            "parser_error_fixture": {"errors": 1},
             "assertions": assertions,
         }
     )

@@ -31,7 +31,7 @@ def png_size(path: Path) -> tuple[int, int]:
 
 def main() -> int:
     evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
-    if evidence.get("schema_version") != "2.0":
+    if evidence.get("schema_version") != "3.0":
         raise AssertionError("Evidence schema is stale; run capture_replay_evidence.py")
     assertions = evidence.get("assertions", {})
     if not assertions or not all(assertions.values()):
@@ -60,6 +60,9 @@ def main() -> int:
         )
         if "## Reflection" not in markdown:
             failures.append(f"{name}: missing Reflection section")
+        for label in ("**Worked:**", "**Failed:**", "**Resolution:**"):
+            if label not in markdown:
+                failures.append(f"{name}: reflection missing {label}")
         code_cells = [cell for cell in nb.get("cells", []) if cell.get("cell_type") == "code"]
         if not code_cells:
             failures.append(f"{name}: no code cells")

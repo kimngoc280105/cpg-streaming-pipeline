@@ -21,13 +21,13 @@ the submission repository.
 
 | Check | Result |
 |---|---:|
-| Unit, contract, and evidence tests | 19 passed |
+| Unit, contract, and evidence tests | 25 passed |
 | Python discovery | 74 raw / 61 processed / 13,807 lines |
 | Python AST parse rate | 61/61 (100%) |
-| Baseline Neo4j nodes | 62,375 unique / 62,375 total |
-| Baseline Neo4j edges | 77,819 unique / 77,819 total |
-| Modified/replayed nodes | 62,397 unique / 62,397 total |
-| Modified/replayed edges | 77,849 unique / 77,849 total |
+| Baseline Neo4j nodes | 62,528 unique / 62,528 total |
+| Baseline Neo4j edges | 77,843 unique / 77,843 total |
+| Modified/replayed nodes | 62,550 unique / 62,550 total |
+| Modified/replayed edges | 77,873 unique / 77,873 total |
 | MongoDB source documents | 61 IDs / 61 documents |
 | Spark checkpoint restart | Captured dynamically in `evidence/runtime/verification.json` |
 | Neo4j DLQ records | 0 |
@@ -43,10 +43,10 @@ Connector 5.5.0, Spark 3.5.7, MongoDB Spark Connector 10.7.0, and MongoDB 8.0.
 
 ## Quick start
 
-1. Install the parser and Kafka client:
+1. Install the parser, Kafka client, tests, and book tooling:
 
    ```powershell
-   python -m pip install -e ".[kafka,test]"
+   python -m pip install -e ".[kafka,test,book]"
    ```
 
    Create an ignored local environment file and replace its placeholder secret:
@@ -63,14 +63,15 @@ Connector 5.5.0, Spark 3.5.7, MongoDB Spark Connector 10.7.0, and MongoDB 8.0.
    docker compose ps
    ```
 
-3. Clone and discover the locked Optimum repository:
+3. Clone, lock, and discover the assigned Optimum repository:
 
    ```powershell
-   git clone --depth 1 https://github.com/huggingface/optimum.git source-repo
-   python -m cpg_parser discover --repo source-repo
+   ./scripts/bootstrap-optimum.ps1
    ```
 
-   The reproducible equivalent is `./scripts/bootstrap-optimum.ps1`.
+   The script performs a shallow clone, fetches the recorded commit if the
+   default branch has moved, checks out that exact commit, and prints discovery
+   evidence. Do not replace it with an unlocked clone of the current HEAD.
 
 4. Parse all eligible files:
 
@@ -152,8 +153,9 @@ This is an educational file-local CPG rather than a replacement for Joern:
   managers, and conservative try/match flow.
 - DFG uses lexical-scope reaching definitions and does not fully resolve
   aliases, attributes, containers, closures, or runtime mutation.
-- Calls resolve same-file function names; dynamic dispatch and external calls
-  point to stable `ExternalSymbol` nodes.
+- Calls resolve unambiguous top-level same-file function names; attribute
+  dispatch, nested-scope ambiguity, and external calls point to stable
+  `ExternalSymbol` nodes.
 
 These limits should be stated explicitly in the Jupyter Book.
 
@@ -173,8 +175,9 @@ jupyter-book build --html --strict
 `capture_replay_evidence.py` performs four measured stages: locked baseline,
 modified file, forced unchanged replay, and Spark restart plus replay. It backs
 up and restores the modified source bytes, polls both sinks, verifies unchanged
-file metadata by digest, and writes `verification.json` only when every
-assertion passes.
+file metadata by digest, consumes real `read_committed` Kafka samples, and
+records the first post-restart Spark batch start offset. It writes
+`verification.json` only when every assertion passes.
 
 `generate_book.py` does not manufacture outputs or execution counts. It executes
 every code cell with `nbclient`, records the evidence SHA-256 in notebook
@@ -200,6 +203,3 @@ database services.
 
 Do not submit a ZIP, PDF, or Word file. Moodle receives exactly the public root
 URL of the published Jupyter Book.
-
-See [SUBMISSION_CHECKLIST.md](SUBMISSION_CHECKLIST.md) for the two manual UI
-captures and the exact GitHub Pages publishing sequence.

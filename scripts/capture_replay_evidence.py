@@ -27,6 +27,7 @@ DEFAULT_STATE_DB = ROOT / "state" / "optimum.sqlite"
 DEFAULT_EVIDENCE = ROOT / "evidence" / "runtime" / "verification.json"
 REPO_ID = "huggingface/optimum"
 REPLAY_FILE = "optimum/version.py"
+SPARK_PROGRESS_LOG = "/opt/checkpoints/source-metadata-progress.jsonl"
 
 
 def utc_now() -> str:
@@ -117,6 +118,76 @@ def kafka_end_offset(topic: str) -> int:
     return sum(offsets)
 
 
+def publish_parser_error_fixture() -> dict[str, Any]:
+    state_db = ROOT / "state" / "evidence-invalid.sqlite"
+    command = [
+        sys.executable,
+        "-m",
+        "cpg_parser",
+        "parse",
+        "--repo",
+        str(ROOT / "tests" / "fixtures" / "invalid_repo"),
+        "--repo-id",
+        "fixture/invalid",
+        "--file",
+        "broken.py",
+        "--state-db",
+        str(state_db),
+        "--bootstrap-servers",
+        "127.0.0.1:9092",
+        "--force",
+    ]
+    result = subprocess.run(
+        command,
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 1:
+        detail = (result.stdout + "\n" + result.stderr).strip()
+        raise RuntimeError(
+            "Invalid fixture must publish one recoverable parser error and exit 1; "
+            f"observed {result.returncode}\n{detail}"
+        )
+    payload = json.loads(result.stdout)
+    if payload.get("errors") != 1:
+        raise RuntimeError(f"Invalid fixture did not report exactly one parser error: {payload}")
+    return payload
+
+
+def kafka_record_sample(topic: str) -> dict[str, Any]:
+    output = docker(
+        "exec",
+        "-T",
+        "broker",
+        "kafka-console-consumer",
+        "--bootstrap-server",
+        "broker:29092",
+        "--topic",
+        topic,
+        "--from-beginning",
+        "--max-messages",
+        "1",
+        "--consumer-property",
+        "isolation.level=read_committed",
+        "--property",
+        "print.key=true",
+        "--property",
+        "key.separator=\t",
+        timeout=90,
+    )
+    line = next((item for item in output.splitlines() if "\t" in item), "")
+    if not line:
+        raise RuntimeError(f"Kafka topic {topic} produced no keyed read_committed sample")
+    key, raw_value = line.split("\t", 1)
+    return {
+        "source": "Kafka broker via read_committed kafka-console-consumer",
+        "key": key,
+        "value": json.loads(raw_value),
+    }
+
+
 def checkpoint_offset() -> int:
     command = (
         "latest=$(find /opt/checkpoints/source-metadata-v1/offsets -maxdepth 1 "
@@ -126,6 +197,113 @@ def checkpoint_offset() -> int:
     output = docker("exec", "-T", "spark-metadata", "bash", "-lc", command, timeout=30)
     payload = json.loads(output.splitlines()[-1])
     return int(payload["cpg.source-metadata.v1"]["0"])
+
+
+def spark_progress_events() -> list[dict[str, Any]]:
+    command = f"if [ -f {SPARK_PROGRESS_LOG} ]; then cat {SPARK_PROGRESS_LOG}; fi"
+    output = docker("exec", "-T", "spark-metadata", "sh", "-c", command, timeout=30)
+    return [json.loads(line) for line in output.splitlines() if line.strip()]
+
+
+def _progress_offset(progress: dict[str, Any], field: str) -> int:
+    sources = progress.get("sources", [])
+    if not sources:
+        raise ValueError("Structured Streaming progress contains no source offsets")
+    value = sources[0].get(field)
+    if isinstance(value, str):
+        value = json.loads(value)
+    try:
+        return int(value["cpg.source-metadata.v1"]["0"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"Unexpected Kafka {field}: {value!r}") from exc
+
+
+def wait_for_restart_ready(
+    file_identifier: str,
+    previous_event_count: int,
+    expected_checkpoint: int,
+    expected_metadata_end: int,
+    expected_mongo: dict[str, Any],
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    observed_run_id = ""
+    observed_at = 0.0
+    last_detail = "no query_started event"
+    while time.monotonic() < deadline:
+        events = spark_progress_events()
+        new_events = events[previous_event_count:]
+        starts = [event for event in new_events if event.get("type") == "query_started"]
+        if starts and not observed_run_id:
+            observed_run_id = starts[-1]["run_id"]
+            observed_at = time.monotonic()
+        if observed_run_id and time.monotonic() - observed_at >= 8:
+            checkpoint = checkpoint_offset()
+            metadata_end = kafka_end_offset("cpg.source-metadata.v1")
+            mongo = mongo_snapshot(file_identifier)
+            expected_document = expected_mongo["document"]
+            document = mongo.get("document") or {}
+            unchanged = (
+                checkpoint == expected_checkpoint
+                and metadata_end == expected_metadata_end
+                and int(document.get("kafka_offset", -1))
+                == int(expected_document["kafka_offset"])
+                and mongo["other_documents_digest"]
+                == expected_mongo["other_documents_digest"]
+                and mongo["documents"] == expected_mongo["documents"]
+                and mongo["distinct_files"] == expected_mongo["distinct_files"]
+            )
+            if unchanged:
+                return {
+                    "captured_at": utc_now(),
+                    "query_run_id": observed_run_id,
+                    "checkpoint_offset": checkpoint,
+                    "metadata_topic_end_offset": metadata_end,
+                    "mongo_document_offset": int(document["kafka_offset"]),
+                    "other_documents_digest": mongo["other_documents_digest"],
+                }
+            last_detail = json.dumps(
+                {
+                    "query_run_id": observed_run_id,
+                    "checkpoint": checkpoint,
+                    "metadata_end": metadata_end,
+                    "mongo_offset": document.get("kafka_offset"),
+                    "other_documents_digest": mongo.get("other_documents_digest"),
+                },
+                sort_keys=True,
+            )
+        time.sleep(2)
+    raise TimeoutError(f"Spark did not resume idle at the saved checkpoint: {last_detail}")
+
+
+def wait_for_input_progress(
+    query_run_id: str,
+    previous_event_count: int,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    last_detail = "no input progress event"
+    while time.monotonic() < deadline:
+        events = spark_progress_events()[previous_event_count:]
+        for event in events:
+            progress = event.get("progress", {})
+            if (
+                event.get("type") == "query_progress"
+                and progress.get("runId") == query_run_id
+                and int(progress.get("numInputRows", 0)) > 0
+            ):
+                return {
+                    "timestamp": progress.get("timestamp"),
+                    "run_id": progress.get("runId"),
+                    "batch_id": int(progress["batchId"]),
+                    "num_input_rows": int(progress["numInputRows"]),
+                    "start_offset": _progress_offset(progress, "startOffset"),
+                    "end_offset": _progress_offset(progress, "endOffset"),
+                }
+        if events:
+            last_detail = json.dumps(events[-1], sort_keys=True)[:1000]
+        time.sleep(2)
+    raise TimeoutError(f"Spark emitted no measurable post-restart input batch: {last_detail}")
 
 
 def neo4j_password() -> str:
@@ -337,6 +515,13 @@ def validate_evidence(evidence: dict[str, Any]) -> dict[str, bool]:
     restarted = stages["restart_replay"]
     all_stages = [baseline, modified, unchanged, restarted]
     expected_files = evidence["repository"]["processed_python_files"]
+    samples = evidence["kafka_samples"]
+    required_sample_topics = {
+        "cpg.nodes.v1",
+        "cpg.edges.v1",
+        "cpg.source-metadata.v1",
+        "cpg.parser-errors.v1",
+    }
     assertions = {
         "only_requested_file_processed": all(
             stage["parser"]["path"] == REPLAY_FILE for stage in all_stages
@@ -390,6 +575,27 @@ def validate_evidence(evidence: dict[str, Any]) -> dict[str, bool]:
             evidence["spark_restart"]["checkpoint_before_restart"]
             < restarted["spark_checkpoint_offset"]
         ),
+        "checkpoint_preserved_while_restart_was_idle": (
+            evidence["spark_restart"]["checkpoint_observed_after_restart"]
+            == evidence["spark_restart"]["checkpoint_before_restart"]
+        ),
+        "mongo_unchanged_while_restart_was_idle": (
+            evidence["spark_restart"]["mongo_offset_observed_after_restart"]
+            == unchanged["mongo"]["document"]["kafka_offset"]
+            and evidence["spark_restart"]["other_documents_digest_after_restart"]
+            == unchanged["mongo"]["other_documents_digest"]
+        ),
+        "first_post_restart_batch_starts_at_checkpoint": (
+            evidence["spark_restart"]["first_input_progress"]["start_offset"]
+            == evidence["spark_restart"]["checkpoint_before_restart"]
+        ),
+        "kafka_samples_cover_required_topics": required_sample_topics <= set(samples),
+        "kafka_samples_have_keys_version_and_event_time": all(
+            sample["key"]
+            and sample["value"]["schema_version"] == "1.0"
+            and sample["value"]["event_time"].endswith("Z")
+            for sample in samples.values()
+        ),
         "neo4j_dlq_is_empty": evidence["neo4j_dlq_end_offset"] == 0,
     }
     return assertions
@@ -416,6 +622,7 @@ def main() -> int:
         raise RuntimeError(f"Replay target does not exist: {target}")
 
     require_stack()
+    parser_error_fixture = publish_parser_error_fixture()
     original_bytes = target.read_bytes()
     baseline_bytes = run_bytes(["git", "-C", str(repo), "show", f"HEAD:{REPLAY_FILE}"])
     if original_bytes == baseline_bytes:
@@ -491,6 +698,8 @@ def main() -> int:
         )
 
         checkpoint_before_restart = unchanged["spark_checkpoint_offset"]
+        metadata_end_before_restart = unchanged["kafka_metadata_end_offset"]
+        progress_event_count = len(spark_progress_events())
         docker("restart", "spark-metadata", timeout=120)
         deadline = time.monotonic() + args.timeout
         while time.monotonic() < deadline:
@@ -501,6 +710,14 @@ def main() -> int:
         else:
             raise TimeoutError("spark-metadata did not return to RUNNING after restart")
 
+        restart_ready = wait_for_restart_ready(
+            file_identifier,
+            progress_event_count,
+            checkpoint_before_restart,
+            metadata_end_before_restart,
+            unchanged["mongo"],
+            args.timeout,
+        )
         restarted = capture_stage(
             "restart_replay",
             repo,
@@ -511,8 +728,20 @@ def main() -> int:
             args.timeout,
             force=True,
         )
+        first_input_progress = wait_for_input_progress(
+            restart_ready["query_run_id"], progress_event_count, args.timeout
+        )
+        kafka_samples = {
+            topic: kafka_record_sample(topic)
+            for topic in (
+                "cpg.nodes.v1",
+                "cpg.edges.v1",
+                "cpg.source-metadata.v1",
+                "cpg.parser-errors.v1",
+            )
+        }
         evidence: dict[str, Any] = {
-            "schema_version": "2.0",
+            "schema_version": "3.0",
             "captured_at": utc_now(),
             "repository": {
                 "repo_id": REPO_ID,
@@ -533,6 +762,8 @@ def main() -> int:
                 "backup_path": str(backup_path.relative_to(ROOT)),
             },
             "connector_status": connector_status(),
+            "parser_error_fixture": parser_error_fixture,
+            "kafka_samples": kafka_samples,
             "preflight_sync": {
                 "parser": sync_result,
                 "mongo_offset": previous_offset,
@@ -545,6 +776,18 @@ def main() -> int:
             },
             "spark_restart": {
                 "checkpoint_before_restart": checkpoint_before_restart,
+                "checkpoint_observed_after_restart": restart_ready["checkpoint_offset"],
+                "metadata_end_observed_after_restart": restart_ready[
+                    "metadata_topic_end_offset"
+                ],
+                "mongo_offset_observed_after_restart": restart_ready[
+                    "mongo_document_offset"
+                ],
+                "other_documents_digest_after_restart": restart_ready[
+                    "other_documents_digest"
+                ],
+                "query_run_id": restart_ready["query_run_id"],
+                "first_input_progress": first_input_progress,
                 "checkpoint_after_replay": restarted["spark_checkpoint_offset"],
             },
             "neo4j_dlq_end_offset": kafka_end_offset("cpg.neo4j-dlq.v1"),

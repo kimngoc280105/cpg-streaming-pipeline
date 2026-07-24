@@ -184,6 +184,7 @@ services:
       MONGODB_DATABASE: ${MONGODB_DATABASE:-lab04}
       MONGODB_COLLECTION: ${MONGODB_COLLECTION:-source_metadata}
       CHECKPOINT_DIR: /opt/checkpoints/source-metadata-v1
+      SPARK_PROGRESS_LOG: /opt/checkpoints/source-metadata-progress.jsonl
       HOME: /tmp
     volumes:
       - ./spark_jobs:/opt/app/spark_jobs:ro

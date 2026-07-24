@@ -8,13 +8,15 @@
     "repository",
     "replay_file",
     "connector_status",
+    "parser_error_fixture",
+    "kafka_samples",
     "stages",
     "spark_restart",
     "neo4j_dlq_end_offset",
     "assertions"
   ],
   "properties": {
-    "schema_version": {"const": "2.0"},
+    "schema_version": {"const": "3.0"},
     "captured_at": {"type": "string", "format": "date-time"},
     "repository": {
       "type": "object",
@@ -29,6 +31,16 @@
       "required": ["path", "file_id", "git_diff"]
     },
     "connector_status": {"type": "object"},
+    "parser_error_fixture": {"type": "object"},
+    "kafka_samples": {
+      "type": "object",
+      "required": [
+        "cpg.nodes.v1",
+        "cpg.edges.v1",
+        "cpg.source-metadata.v1",
+        "cpg.parser-errors.v1"
+      ]
+    },
     "preflight_sync": {"type": "object"},
     "stages": {
       "type": "object",
@@ -37,12 +49,21 @@
     },
     "spark_restart": {
       "type": "object",
-      "required": ["checkpoint_before_restart", "checkpoint_after_replay"]
+      "required": [
+        "checkpoint_before_restart",
+        "checkpoint_observed_after_restart",
+        "metadata_end_observed_after_restart",
+        "mongo_offset_observed_after_restart",
+        "other_documents_digest_after_restart",
+        "query_run_id",
+        "first_input_progress",
+        "checkpoint_after_replay"
+      ]
     },
     "neo4j_dlq_end_offset": {"type": "integer", "minimum": 0},
     "assertions": {
       "type": "object",
-      "minProperties": 16,
+      "minProperties": 21,
       "additionalProperties": {"type": "boolean"}
     }
   },

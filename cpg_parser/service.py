@@ -164,10 +164,31 @@ class ParserService:
             },
         }
         metadata = self._metadata(relative, identifier, digest, raw, common, "error", {}, {}, [], str(exc))
-        self.publisher.publish_transaction(
+        stale_edges = self.manifest.previous_elements(identifier, "edge")
+        stale_nodes = self.manifest.previous_elements(identifier, "node")
+        records: list[Record] = []
+        for stale_id in sorted(stale_edges):
+            value = {**common, "op": "delete", "edge": {"id": stale_id}}
+            value["event_id"] = stable_hash("edge", "delete", stale_id, digest)
+            records.append((TOPIC_EDGES, stale_id, value))
+        for stale_id in sorted(stale_nodes):
+            value = {**common, "op": "delete", "node": {"id": stale_id}}
+            value["event_id"] = stable_hash("node", "delete", stale_id, digest)
+            records.append((TOPIC_NODES, stale_id, value))
+        records.extend(
             [(TOPIC_ERRORS, error_identifier, error), (TOPIC_METADATA, identifier, metadata)]
         )
-        return FileProcessResult(relative, identifier, digest, "error", error=str(exc))
+        self.publisher.publish_transaction(records)
+        self.manifest.replace_file(identifier, digest, common["event_time"], set(), set())
+        return FileProcessResult(
+            relative,
+            identifier,
+            digest,
+            "error",
+            deleted_nodes=len(stale_nodes),
+            deleted_edges=len(stale_edges),
+            error=str(exc),
+        )
 
     def _metadata(
         self,
@@ -208,4 +229,3 @@ class ParserService:
 
 def transactional_id(repo_id: str) -> str:
     return f"lab04-{stable_hash(repo_id)[:12]}-{os.getpid()}"
-

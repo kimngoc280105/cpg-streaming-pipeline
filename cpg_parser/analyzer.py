@@ -26,13 +26,27 @@ class _NameVisitor(ast.NodeVisitor):
     def __init__(self, root: ast.AST) -> None:
         self.root = root
         self.definitions: dict[str, set[ast.AST]] = defaultdict(set)
+        self.kills: set[str] = set()
         self.uses: list[tuple[str, ast.Name]] = []
 
     def visit_Name(self, node: ast.Name) -> None:  # noqa: N802
-        if isinstance(node.ctx, (ast.Store, ast.Del)):
+        if isinstance(node.ctx, ast.Store):
             self.definitions[node.id].add(node)
+        elif isinstance(node.ctx, ast.Del):
+            self.kills.add(node.id)
         elif isinstance(node.ctx, ast.Load):
             self.uses.append((node.id, node))
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:  # noqa: N802
+        # ``x += value`` reads the previous value of x and then defines x.
+        # Python's AST marks the target only as Store, so model the read
+        # explicitly before applying the generated definition.
+        if isinstance(node.target, ast.Name):
+            self.uses.append((node.target.id, node.target))
+            self.definitions[node.target.id].add(node.target)
+        else:
+            self.visit(node.target)
+        self.visit(node.value)
 
     def visit_Import(self, node: ast.Import) -> None:  # noqa: N802
         for alias in node.names:
@@ -272,6 +286,7 @@ class CPGAnalyzer:
     def _build_dfg(self, scope: ast.AST, statements: list[ast.stmt], entry_id: str) -> None:
         statement_ids = {self.node_ids[id(statement)] for statement in statements}
         defs_by_statement: dict[str, dict[str, set[str]]] = {}
+        kills_by_statement: dict[str, set[str]] = {}
         uses_by_statement: dict[str, list[tuple[str, str]]] = {}
 
         for statement in statements:
@@ -282,6 +297,7 @@ class CPGAnalyzer:
                 name: {self.node_ids[id(node)] for node in nodes if id(node) in self.node_ids}
                 for name, nodes in visitor.definitions.items()
             }
+            kills_by_statement[sid] = set(visitor.kills)
             uses_by_statement[sid] = [
                 (name, self.node_ids[id(node)]) for name, node in visitor.uses if id(node) in self.node_ids
             ]
@@ -320,6 +336,8 @@ class CPGAnalyzer:
                         incoming[name].update(ids)
                 generated = defs_by_statement.get(sid, {})
                 outgoing = {name: set(ids) for name, ids in incoming.items()}
+                for name in kills_by_statement.get(sid, set()):
+                    outgoing.pop(name, None)
                 for name, ids in generated.items():
                     outgoing[name] = set(ids)
                 normalized_in = {name: set(ids) for name, ids in incoming.items()}
@@ -343,14 +361,16 @@ class CPGAnalyzer:
 
     def _build_call_graph(self) -> None:
         symbols: dict[str, str] = {}
-        for node in ast.walk(self.tree):
+        for node in self.tree.body:
             if isinstance(node, FUNCTION_TYPES):
                 symbols.setdefault(node.name, self.node_ids[id(node)])
 
         for call in (node for node in ast.walk(self.tree) if isinstance(node, ast.Call)):
             callee = self._dotted_name(call.func) or "<dynamic-call>"
-            short_name = callee.rsplit(".", 1)[-1]
-            target = symbols.get(callee) or symbols.get(short_name)
+            # Only a bare function name is safe to resolve without type
+            # inference. Attribute calls such as obj.run() remain external
+            # rather than being matched to an unrelated same-name method.
+            target = symbols.get(callee) if isinstance(call.func, ast.Name) else None
             resolved = target is not None
             if target is None:
                 target = self._add_external_node("$", f"call:{callee}", callee)
@@ -418,4 +438,3 @@ class CPGAnalyzer:
             variable=variable,
             resolved=resolved,
         )
-

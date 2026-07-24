@@ -71,7 +71,7 @@ def test_events_match_json_schemas(tmp_path):
         manifest.close()
 
 
-def test_syntax_error_is_routed_and_does_not_update_manifest(tmp_path):
+def test_syntax_error_is_routed_and_recorded_in_manifest(tmp_path):
     repo = ROOT / "tests" / "fixtures" / "invalid_repo"
     service, publisher, manifest = make_service(repo, tmp_path)
     try:
@@ -81,7 +81,38 @@ def test_syntax_error_is_routed_and_does_not_update_manifest(tmp_path):
         error = next(value for topic, _, value in publisher.records if topic == TOPIC_ERRORS)
         schema = json.loads((ROOT / "schemas" / "error-event.schema.json").read_text(encoding="utf-8"))
         jsonschema.validate(error, schema)
-        assert manifest.content_hash(result[0].file_id) is None
+        assert manifest.content_hash(result[0].file_id) == result[0].content_hash
+        assert manifest.previous_elements(result[0].file_id, "node") == set()
+        assert manifest.previous_elements(result[0].file_id, "edge") == set()
     finally:
         manifest.close()
 
+
+def test_valid_file_becoming_invalid_deletes_stale_graph(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    file_path = repo / "app.py"
+    file_path.write_text("def valid(x):\n    return x + 1\n", encoding="utf-8")
+    service, publisher, manifest = make_service(repo, tmp_path)
+    try:
+        first = service.process("app.py")
+        assert first[0].status == "processed"
+        publisher.records.clear()
+
+        file_path.write_text("def broken(:\n    pass\n", encoding="utf-8")
+        second = service.process("app.py")
+
+        assert second[0].status == "error"
+        assert second[0].deleted_nodes == first[0].nodes
+        assert second[0].deleted_edges == first[0].edges
+        assert any(topic == TOPIC_NODES and value["op"] == "delete" for topic, _, value in publisher.records)
+        assert any(topic == TOPIC_EDGES and value["op"] == "delete" for topic, _, value in publisher.records)
+        assert manifest.previous_elements(first[0].file_id, "node") == set()
+        assert manifest.previous_elements(first[0].file_id, "edge") == set()
+
+        emitted = len(publisher.records)
+        third = service.process("app.py")
+        assert third[0].status == "skipped"
+        assert len(publisher.records) == emitted
+    finally:
+        manifest.close()

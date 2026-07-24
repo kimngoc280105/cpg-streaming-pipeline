@@ -39,7 +39,7 @@ def evidence_sha256() -> str:
 def load_evidence() -> dict:
     path = ROOT / "evidence" / "runtime" / "verification.json"
     evidence = json.loads(path.read_text(encoding="utf-8"))
-    if evidence.get("schema_version") != "2.0":
+    if evidence.get("schema_version") != "3.0":
         raise RuntimeError(
             "Replay evidence is stale. Run: python scripts/capture_replay_evidence.py"
         )
@@ -143,7 +143,11 @@ print('PASS: all required architecture services are declared')"""
             "Architecture",
             diagram,
             [code_cell(services_source)],
-            "Kafka Connect is a separate service from Neo4j. Single-node Kafka and replication factor one are deliberate limits of this educational deployment.",
+            """**Worked:** Kafka Connect and Spark operate on separate branches, so graph topology never passes through Spark.
+
+**Failed:** Connector creation was asynchronous and an immediate status request could observe a temporary 404.
+
+**Resolution:** `register-wait.sh` now retries until both the connector and its task are `RUNNING`. Single-node Kafka and replication factor one remain documented educational limits.""",
         ),
     )
 
@@ -191,7 +195,11 @@ print('PASS: shallow clone, locked commit, and discovery counts verified')"""
             "Task 1 - Repository cloning and file discovery",
             f"The assigned repository is [{REPO_ID}]({REPO_URL}). The ignored source tree is a shallow clone locked to `{repository['commit_sha']}`. Baseline and post-replay line counts are reported separately.",
             [code_cell(source)],
-            f"The locked baseline contains {repository['raw_python_files']} raw Python files and {repository['processed_python_files']} processed files. The replay modification changes line count only; it does not change file discovery or parseability.",
+            f"""**Worked:** The shallow clone reports {repository['raw_python_files']} raw Python files and {repository['processed_python_files']} processed files with full parseability.
+
+**Failed:** A plain shallow clone of a moving default branch could change the file counts, and the replay edit made the current line count differ from the baseline.
+
+**Resolution:** The bootstrap script fetches and checks out the recorded commit, while the report records baseline and modified line counts separately.""",
         ),
     )
 
@@ -254,9 +262,13 @@ print('PASS: parser, replay, schema, and syntax-error tests')"""
         "task2_parser.ipynb",
         notebook(
             "Task 2 - Incremental CPG Parser Service",
-            "The service uses Python `ast`, stable structural IDs, statement-level CFG, lexical reaching-definitions DFG, and same-file call resolution. It releases each file graph before processing the next file.",
+            "The service uses Python `ast`, stable structural IDs, statement-level CFG, lexical reaching-definitions DFG, and conservative top-level same-file call resolution. It releases each file graph before processing the next file.",
             [code_cell(aggregate_source), code_cell(tests_source)],
-            "The analyzer is intentionally conservative for aliases, dynamic dispatch, container mutation, and exact exception flow. Tests verify deterministic IDs, graph categories, stale deletion, schema contracts, and safe syntax-error routing.",
+            """**Worked:** Deterministic IDs, all four CPG edge categories, bounded file-by-file processing, and stale-element reconciliation pass the regression suite.
+
+**Failed:** Syntax errors originally risked leaving the last valid graph in Neo4j, while attribute calls and `AugAssign`/`del` produced misleading static-analysis results.
+
+**Resolution:** Error transactions now delete stale elements and update the manifest; dynamic attribute calls remain external, and DFG transfer functions explicitly model augmented reads and deletion kills. Aliasing and runtime dispatch remain documented limits.""",
         ),
     )
 
@@ -277,54 +289,32 @@ for topic in topics:
     )
     print(result.stdout.rstrip())
 print('PASS: four required topics and the connector DLQ are configured')"""
-    samples_source = f"""import json
-import sys
+    samples_source = """import json
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 root = Path('..').resolve()
-sys.path.insert(0, str(root))
-from cpg_parser.manifest import Manifest
-from cpg_parser.publisher import MemoryPublisher
-from cpg_parser.service import ParserService
-
-samples = {{}}
-repo = root / 'source-repo'
-if not repo.is_dir():
-    repo = root.parent / 'source-repo'
-with TemporaryDirectory() as directory:
-    valid_publisher = MemoryPublisher()
-    with Manifest(Path(directory) / 'valid.sqlite') as manifest:
-        ParserService(repo, '{REPO_ID}', valid_publisher, manifest).process(
-            '{REPLAY_FILE}', force=True
-        )
-    for topic, key, value in valid_publisher.records:
-        samples.setdefault(topic, {{'key': key, 'value': value}})
-
-    error_publisher = MemoryPublisher()
-    with Manifest(Path(directory) / 'error.sqlite') as manifest:
-        ParserService(
-            root / 'tests/fixtures/invalid_repo', 'fixture/invalid', error_publisher, manifest
-        ).process('broken.py', force=True)
-    for topic, key, value in error_publisher.records:
-        if topic == 'cpg.parser-errors.v1':
-            samples[topic] = {{'key': key, 'value': value}}
-
-required = {{'cpg.nodes.v1', 'cpg.edges.v1', 'cpg.source-metadata.v1', 'cpg.parser-errors.v1'}}
+evidence = json.loads((root / 'evidence/runtime/verification.json').read_text(encoding='utf-8'))
+samples = evidence['kafka_samples']
+required = {'cpg.nodes.v1', 'cpg.edges.v1', 'cpg.source-metadata.v1', 'cpg.parser-errors.v1'}
 assert required <= set(samples)
 for record in samples.values():
+    assert record['source'].startswith('Kafka broker')
     assert record['key']
     assert record['value']['schema_version'] == '1.0'
     assert record['value']['event_time'].endswith('Z')
 print(json.dumps(samples, indent=2, ensure_ascii=False))
-print('PASS: node, edge, metadata, and parser-error event samples validated')"""
+print('PASS: read_committed broker samples cover all four required topics')"""
     write(
         "task3_kafka.ipynb",
         notebook(
             "Task 3 - Kafka topic and event design",
             "Nodes, edges, metadata, and parser failures have separate topics. Every record carries a schema version, event time, stable key, content hash, run ID, event ID, and operation.",
             [code_cell(topics_source), code_cell(samples_source)],
-            "Compaction retains current keyed state but does not alone guarantee database idempotency. Stable keys, Neo4j `MERGE`, MongoDB replacement upserts, and the parser manifest provide the remaining guarantees.",
+            """**Worked:** All required topics have the intended partition, replication, cleanup policy, keyed records, schema version, and UTC event time.
+
+**Failed:** In-memory samples proved serialization but did not prove that Kafka had accepted and exposed the records.
+
+**Resolution:** Replay capture now publishes an invalid fixture and stores `read_committed` samples consumed from the live broker for node, edge, metadata, and parser-error topics. Compaction is combined with stable keys and idempotent sinks.""",
         ),
     )
 
@@ -384,7 +374,11 @@ print('PASS: Neo4j connector DLQ is empty')"""
                 code_cell(dlq_source),
                 image_cell("neo4j-browser.png", "Neo4j Browser showing CPG nodes and relationships"),
             ],
-            "Connector status, total-versus-distinct IDs, graph categories, and an empty DLQ are checked independently. Spark is absent from the graph path.",
+            """**Worked:** Connector/task status, total-versus-distinct IDs, all edge kinds, the Browser graph, and an empty DLQ independently confirm direct graph ingestion.
+
+**Failed:** Connector registration initially raced the asynchronous REST API and could finish before the task reached `RUNNING`.
+
+**Resolution:** Registration is idempotent and followed by bounded status polling; edge Cypher creates placeholder endpoints so cross-topic arrival order cannot lose relationships.""",
         ),
     )
 
@@ -430,7 +424,11 @@ print('PASS: Spark checkpoint has consumed the metadata topic')"""
                     "MongoDB UI capture of the replay file; the executable output above verifies the final live offset and checkpoint",
                 ),
             ],
-            "The checkpoint tracks Kafka progress rather than file hashes. MongoDB document and distinct-ID counts prove that repeated metadata events replace rather than duplicate a file document.",
+            """**Worked:** Spark consumes only metadata, MongoDB maintains one `_id=file_id` document per source file, and the checkpoint reaches the Kafka end offset.
+
+**Failed:** First startup was slow while resolving connector packages, and document counts alone could not distinguish replacement from duplication.
+
+**Resolution:** A persistent Ivy cache and checkpoint volume support restart, while distinct-ID counts, content hashes, Kafka offsets, and replacement-upsert settings verify the sink behavior.""",
         ),
     )
 
@@ -529,7 +527,11 @@ print('PASS: live final state matches the captured restart-replay stage')"""
             "Task 6 - Idempotent replay verification",
             intro,
             [code_cell(evidence_source), code_cell(diff_source), code_cell(live_source)],
-            "The evidence distinguishes parser idempotency, database uniqueness, unchanged-file stability, and Spark offset recovery. Matching hashes and digests show that only the requested file changed, while final live queries prevent the table from being an unsupported claim.",
+            """**Worked:** Modified and forced-unchanged replays converge to unique Neo4j IDs and one updated MongoDB document without changing the other 60 documents.
+
+**Failed:** Before/after checkpoint numbers alone did not prove that the restarted Spark query skipped previously committed offsets.
+
+**Resolution:** The Spark listener now records the restarted query run and its first input batch; the evidence verifies that the batch starts exactly at the saved checkpoint, while an idle pre-publish snapshot proves MongoDB was unchanged.""",
         ),
     )
 
